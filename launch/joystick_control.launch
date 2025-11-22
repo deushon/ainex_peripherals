@@ -1,10 +1,24 @@
 <?xml version="1.0"?>
 <launch>
+    <!-- Arguments with defaults -->
+    <arg name="robot_id" default="robot_1" />
+    <arg name="port" default="/dev/ttyUSB0" />
+    <arg name="baudrate" default="9600" />
+
+    <!-- Joystick node -->
     <node name="joystick" pkg="joy" type="joy_node" output="screen">
         <param name="dev" type="string" value="/dev/input/js0"/>
         <param name="autorepeat_rate"   type="double" value="20.0"/>
         <param name="coalesce_interval" type="double" value="0.05"/>
     </node>
 
-    <node name="joystick_control" pkg="ainex_peripherals" type="joystick_control.py" output="screen"/>
+    <!-- Robot control node with game features -->
+    <node name="joystick_control" pkg="ainex_peripherals" type="joystick_control.py" output="screen">
+        <!-- Robot ID (required for game) - set via command line: robot_id:=robot_1 -->
+        <param name="robot_id" value="$(arg robot_id)" />
+        <!-- Serial port for Arduino (optional, default: /dev/ttyUSB0) -->
+        <param name="port" value="$(arg port)" />
+        <!-- Serial baudrate (optional, default: 9600) -->
+        <param name="baudrate" value="$(arg baudrate)" />
+    </node>
 </launch>

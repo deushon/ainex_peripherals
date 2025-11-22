@@ -13,7 +13,7 @@
         <param name="camera_frame_id"   value="$(arg camera_name)" />
         <param name="io_method"         value="mmap"/>
         <param name="camera_info_url "  value="file:///home/ubuntu/.ros/camera_info/head_camera.yaml"/>
-        <param name="frame_rate" value="15.0"/>
+        <param name="frame_rate" value="10.0"/>
     </node>
-    <param name="camera/image_raw/compressed/jpeg_quality" value="9"/>
-    </launch>
+    <param name="camera/image_raw/compressed/jpeg_quality" value="30"/>
+</launch>

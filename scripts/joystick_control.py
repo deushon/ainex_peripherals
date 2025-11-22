@@ -7,11 +7,13 @@ import threading
 import pygame.mixer
 import os
 import math
+import json
 from ainex_sdk import Board
 from sensor_msgs.msg import Joy, Imu
 from ainex_kinematics.gait_manager import GaitManager
 from ainex_kinematics.motion_manager import MotionManager
-from std_msgs.msg import String
+from std_msgs.msg import String, Int32, Bool
+from std_srvs.srv import Trigger, TriggerResponse
 
 # --- Constants and Mappings ---
 AXES_MAP = 'lx', 'ly', 'rx', 'ry', 'r2', 'l2', 'hat_x', 'hat_y'
@@ -25,33 +27,58 @@ class ButtonState:
 
 # --- Serial Reader Thread ---
 class SerialReader(threading.Thread):
-    def __init__(self, ser_instance, hit_info_pub_instance):
+    def __init__(self, ser_getter, hit_detection_pub_instance, robot_id):
         super().__init__()
-        self.ser = ser_instance
-        self.hit_info_pub = hit_info_pub_instance
+        self.ser_getter = ser_getter  # Function to get serial instance (handles None)
+        self.hit_detection_pub = hit_detection_pub_instance
+        self.robot_id = robot_id
         self.running = True
+        self.consecutive_errors = 0
+        self.max_consecutive_errors = 10
 
     def run(self):
         rospy.loginfo("Serial port reading thread started.")
         while self.running and not rospy.is_shutdown():
             try:
-                if self.ser.in_waiting > 0:
-                    line = self.ser.readline().decode('utf-8').strip()
+                ser = self.ser_getter()
+                if ser is None or not ser.is_open:
+                    # Serial port not available, wait and retry
+                    time.sleep(1.0)
+                    continue
+                
+                if ser.in_waiting > 0:
+                    line = ser.readline().decode('utf-8').strip()
                     if line:
                         rospy.loginfo(f"Received from Arduino: '{line}'")
                         if line == "HIT":
+                            # Publish hit detection to game server with JSON format
+                            hit_data = {
+                                'robot_id': self.robot_id,
+                                'timestamp': rospy.get_time(),
+                                'hit_detected': True
+                            }
                             hit_msg = String()
-                            hit_msg.data = "1"
-                            self.hit_info_pub.publish(hit_msg)
-                            rospy.loginfo("Published to /hit_info: 1")
+                            hit_msg.data = json.dumps(hit_data)
+                            self.hit_detection_pub.publish(hit_msg)
+                            rospy.loginfo(f"Published hit detection to /game/hit_detection: {hit_msg.data}")
                         else:
                             rospy.logwarn(f"Received unknown response from Arduino: '{line}'")
+                    self.consecutive_errors = 0  # Reset error counter on successful read
             except serial.SerialException as e:
-                rospy.logerr(f"Serial port error in reading thread: {e}")
-                self.running = False
+                self.consecutive_errors += 1
+                if self.consecutive_errors >= self.max_consecutive_errors:
+                    rospy.logwarn(f"Serial port error in reading thread (attempt {self.consecutive_errors}): {e}")
+                    rospy.logwarn("Serial port appears disconnected. Will retry when connection is restored.")
+                    self.consecutive_errors = 0  # Reset to avoid spam
+                time.sleep(1.0)  # Wait longer on error
+            except AttributeError:
+                # Serial port is None or not initialized
+                time.sleep(1.0)
             except Exception as e:
-                rospy.logerr(f"Error in serial reading thread: {e}")
-            time.sleep(0.01)
+                rospy.logwarn(f"Unexpected error in serial reading thread: {e}")
+                time.sleep(0.5)
+            else:
+                time.sleep(0.01)  # Normal sleep when everything is OK
         rospy.loginfo("Serial port reading thread stopped.")
 
     def stop(self):
@@ -77,6 +104,19 @@ class JoystickController:
         self.last_axes = dict(zip(AXES_MAP, [0.0] * len(AXES_MAP)))
         self.last_buttons = dict(zip(BUTTON_MAP, [0.0] * len(BUTTON_MAP)))
 
+        # --- Game State Variables ---
+        self.max_hp = 100
+        self.current_hp = 100
+        self.is_locked = False  # Locked when HP = 0 or match not started
+        self.robot_id = rospy.get_param('~robot_id', 'robot_1')
+        self.is_firing = False  # Track firing state
+        
+        # --- Serial Port Configuration ---
+        self.serial_port = None
+        self.serial_port_name = rospy.get_param('~port', '/dev/ttyUSB0')
+        self.serial_baudrate = rospy.get_param('~baudrate', 9600)
+        self.serial_lock = threading.Lock()  # Lock for thread-safe serial access
+
         # --- NEW: State variables for Get-Up functionality (from joystick_control 1.py) ---
         self.robot_state = 'stand'
         self.lie_to_stand_action_name = 'lie_to_stand'
@@ -89,7 +129,6 @@ class JoystickController:
         self.setup_speed_parameters()
 
         # --- Initialization from primer.py ---
-        self.ser = None
         self.sound = None
         self.setup_primer_features()
 
@@ -110,16 +149,65 @@ class JoystickController:
             4: {'period_time': [300, 0.2, 0.028], 'x_amp': 0.01, 'y_amp': 0.015, 'angle_amp': 8, 'z_move_amplitude': 0.015, 'gait_base': {'dsp_ratio': 0.2, 'init_y_offset': -0.008, 'step_fb_ratio': 0.028, 'y_swap_amplitude': 0.021, 'z_swap_amplitude': 0.006, 'pelvis_offset': 5, 'arm_swing_gain': 0.5}}
         }
 
+    def get_serial_port(self):
+        """Thread-safe method to get serial port instance."""
+        with self.serial_lock:
+            return self.serial_port
+
+    def reconnect_serial(self):
+        """Attempts to reconnect to Arduino serial port."""
+        with self.serial_lock:
+            # Check if already connected
+            if self.serial_port is not None and self.serial_port.is_open:
+                try:
+                    # Quick check if port is still valid
+                    self.serial_port.in_waiting
+                    return True  # Already connected and working
+                except:
+                    # Port is open but not working, close it
+                    try:
+                        self.serial_port.close()
+                    except:
+                        pass
+                    self.serial_port = None
+            
+            # Close existing connection if any (redundant check)
+            if self.serial_port is not None:
+                try:
+                    if self.serial_port.is_open:
+                        self.serial_port.close()
+                except Exception as e:
+                    rospy.logdebug(f"Error closing serial port: {e}")
+                self.serial_port = None
+            
+            # Try to reconnect
+            try:
+                if os.path.exists(self.serial_port_name):
+                    self.serial_port = serial.Serial(self.serial_port_name, self.serial_baudrate, timeout=1)
+                    rospy.loginfo(f"Successfully connected to Arduino on {self.serial_port_name} at {self.serial_baudrate} baud.")
+                    return True
+                else:
+                    rospy.logdebug(f"Serial port {self.serial_port_name} does not exist yet.")
+                    return False
+            except serial.SerialException as e:
+                rospy.logdebug(f"Failed to connect to serial port: {e}")
+                return False
+            except Exception as e:
+                rospy.logwarn(f"Unexpected error during serial reconnection: {e}")
+                return False
+
+    def check_and_reconnect_serial(self, event):
+        """Periodically checks serial connection and attempts reconnection if needed."""
+        ser = self.get_serial_port()
+        if ser is None or not ser.is_open:
+            # Try to reconnect (will log success internally)
+            self.reconnect_serial()
+
     def setup_primer_features(self):
         """Initializes Serial, Sound, Publisher, and Thread."""
-        try:
-            port = rospy.get_param('~port', '/dev/ttyUSB0')
-            baud = rospy.get_param('~baudrate', 9600)
-            self.ser = serial.Serial(port, baud, timeout=1)
-            rospy.loginfo(f"Opened port {port} at {baud} baud.")
-        except serial.SerialException as e:
-            rospy.logerr(f"Failed to open serial port: {e}")
-            return
+        # Try to connect to serial port (non-blocking - will retry in background)
+        self.reconnect_serial()
+        
         try:
             pygame.mixer.init()
             sound_file_path = os.path.abspath("/home/ubuntu/ros_ws/src/proverka_nod/scripts/FIRED.wav")
@@ -127,20 +215,112 @@ class JoystickController:
                 self.sound = pygame.mixer.Sound(sound_file_path)
                 rospy.loginfo(f"Sound file loaded: {sound_file_path}")
             else:
-                rospy.logerr(f"Sound file not found: {sound_file_path}")
+                rospy.logwarn(f"Sound file not found: {sound_file_path}")
         except Exception as e:
-            rospy.logerr(f"Failed to initialize pygame mixer or load sound: {e}")
-        self.hit_info_pub = rospy.Publisher('/hit_info', String, queue_size=10)
-        self.serial_reader_thread = SerialReader(self.ser, self.hit_info_pub)
+            rospy.logwarn(f"Failed to initialize pygame mixer or load sound: {e}")
+        
+        # Game-related publishers
+        self.hit_detection_pub = rospy.Publisher('/game/hit_detection', String, queue_size=10)
+        self.hp_pub = rospy.Publisher('/game/robot_hp', Int32, queue_size=10)
+        self.firing_state_pub = rospy.Publisher('/game/firing_state', Bool, queue_size=10)
+        self.robot_status_pub = rospy.Publisher('/game/robot_status', String, queue_size=10)
+        
+        # Game-related subscribers
+        self.damage_sub = rospy.Subscriber('/game/validated_damage', Int32, self.damage_callback)
+        self.control_lock_sub = rospy.Subscriber('/game/control_lock', Bool, self.control_lock_callback)
+        
+        # Initialize serial reader thread with hit detection publisher
+        # Pass getter function instead of direct reference
+        self.serial_reader_thread = SerialReader(self.get_serial_port, self.hit_detection_pub, self.robot_id)
         self.serial_reader_thread.daemon = True
         self.serial_reader_thread.start()
         rospy.on_shutdown(self.serial_reader_thread.stop)
+        
+        # Health check service
+        self.health_service = rospy.Service('/game/robot_health', Trigger, self.health_check_service)
+        
+        # Start HP publishing timer (1-2Hz)
+        self.hp_timer = rospy.Timer(rospy.Duration(0.5), self.publish_hp_status)
+        
+        # Start serial reconnection check timer (every 5 seconds)
+        self.serial_reconnect_timer = rospy.Timer(rospy.Duration(5.0), self.check_and_reconnect_serial)
+
+    def damage_callback(self, msg):
+        """Handle validated damage from server."""
+        damage_amount = msg.data
+        if damage_amount > 0:
+            self.current_hp = max(0, self.current_hp - damage_amount)
+            rospy.loginfo(f"Received validated damage: {damage_amount}. Current HP: {self.current_hp}")
+            
+            # Lock robot if HP reaches 0
+            if self.current_hp <= 0:
+                self.is_locked = True
+                rospy.logwarn("Robot HP reached 0. Robot is now locked.")
+                self.publish_robot_status("hp_zero_locked")
+            
+            # Publish updated HP immediately
+            self.publish_hp_status(None)
+
+    def control_lock_callback(self, msg):
+        """Handle control lock/unlock commands from server."""
+        self.is_locked = msg.data
+        if self.is_locked:
+            rospy.loginfo("Robot control locked by server.")
+            # Stop movement if locked
+            if self.status == 'move':
+                self.status = 'stop'
+                self.gait_manager.stop()
+        else:
+            rospy.loginfo("Robot control unlocked by server.")
+        self.publish_robot_status("lock_changed" if self.is_locked else "unlock_changed")
+
+    def publish_hp_status(self, event):
+        """Publish current HP status to server."""
+        hp_msg = Int32()
+        hp_msg.data = self.current_hp
+        self.hp_pub.publish(hp_msg)
+
+    def publish_robot_status(self, status_type):
+        """Publish general robot status to server."""
+        status_data = {
+            'robot_id': self.robot_id,
+            'status_type': status_type,
+            'hp': self.current_hp,
+            'locked': self.is_locked,
+            'timestamp': rospy.get_time()
+        }
+        status_msg = String()
+        status_msg.data = json.dumps(status_data)
+        self.robot_status_pub.publish(status_msg)
+
+    def health_check_service(self, req):
+        """Service handler for robot health check."""
+        response = TriggerResponse()
+        try:
+            ser = self.get_serial_port()
+            arduino_connected = ser is not None and ser.is_open if ser else False
+            
+            health_data = {
+                'available': True,
+                'hp': self.current_hp,
+                'locked': self.is_locked,
+                'connected': arduino_connected,
+                'robot_id': self.robot_id
+            }
+            response.success = True
+            response.message = json.dumps(health_data)
+            rospy.logdebug(f"Health check requested. Response: {response.message}")
+        except Exception as e:
+            response.success = False
+            response.message = f"Error in health check: {str(e)}"
+            rospy.logerr(response.message)
+        return response
 
     # NEW: IMU Callback from joystick_control 1.py
     def imu_callback(self, msg: Imu):
         """
-        Обрабатывает данные с IMU для определения состояния падения.
-        Логика адаптирована из примера мобильного приложения, используя ay и az.
+        Processes IMU data to determine fall state.
+        Logic adapted from mobile app example, using ay and az.
         """
         try:
             ay = msg.linear_acceleration.y
@@ -188,6 +368,13 @@ class JoystickController:
 
     def axes_callback(self, axes):
         """Calculates and sets walking parameters based on speed mode and joystick input."""
+        # Block control if robot is locked
+        if self.is_locked:
+            if self.status == 'move':
+                self.status = 'stop'
+                self.gait_manager.stop()
+            return
+        
         self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude = 0, 0, 0
         self.update_param = False
         
@@ -255,9 +442,37 @@ class JoystickController:
             self.board.set_buzzer(1500, 0.1, 0.05, 1)
 
     def cross_callback(self, new_state):
-        if self.ser:
-            if new_state == ButtonState.Pressed: self.ser.write(b"FIRE\n")
-            elif new_state == ButtonState.Released: self.ser.write(b"STOP\n")
+        # Block firing if robot is locked
+        if self.is_locked:
+            return
+        
+        ser = self.get_serial_port()
+        if ser is None or not ser.is_open:
+            rospy.logwarn("Cannot send firing command: Arduino not connected.")
+            return
+        
+        try:
+            if new_state == ButtonState.Pressed:
+                ser.write(b"FIRE\n")
+                self.is_firing = True
+                self.firing_state_pub.publish(True)
+                rospy.loginfo("Firing started")
+            elif new_state == ButtonState.Released:
+                ser.write(b"STOP\n")
+                self.is_firing = False
+                self.firing_state_pub.publish(False)
+                rospy.loginfo("Firing stopped")
+        except serial.SerialException as e:
+            rospy.logwarn(f"Failed to send firing command to Arduino: {e}")
+            # Mark serial as disconnected, reconnection timer will handle it
+            with self.serial_lock:
+                if self.serial_port is not None:
+                    try:
+                        if self.serial_port.is_open:
+                            self.serial_port.close()
+                    except:
+                        pass
+                    self.serial_port = None
 
     def x_button_callback(self, new_state):
         if new_state == ButtonState.Pressed and self.sound: self.sound.play()
@@ -272,14 +487,14 @@ class JoystickController:
     # NEW: Circle Callback from joystick_control 1.py
     def circle_callback(self, new_state):
         """
-        Выполняет действие "подняться" (Get Up).
-        Автоматически выбирает между lie_to_stand и recline_to_stand
-        на основе состояния, определенного через IMU.
+        Executes "Get Up" action.
+        Automatically selects between lie_to_stand and recline_to_stand
+        based on state determined via IMU.
         """
         if new_state == ButtonState.Pressed:
             rospy.loginfo(f"Circle (B) button pressed. Current IMU robot state: '{self.robot_state}'.")
             
-            # Добавлена новая проверка
+            # Added new check
             if self.robot_state == 'stand':
                 rospy.loginfo("Robot is already in a 'stand' state. No get-up action will be performed.")
                 self.board.set_buzzer(1500, 0.1, 0.05, 1)
