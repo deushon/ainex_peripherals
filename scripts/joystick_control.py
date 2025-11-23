@@ -4,10 +4,10 @@ import time
 import rospy
 import serial
 import threading
-import pygame.mixer
 import os
 import math
 import json
+# pygame импортируется внутри функции для обработки ошибок
 from ainex_sdk import Board
 from sensor_msgs.msg import Joy, Imu
 from ainex_kinematics.gait_manager import GaitManager
@@ -107,9 +107,18 @@ class JoystickController:
         # --- Game State Variables ---
         self.max_hp = 100
         self.current_hp = 100
-        self.is_locked = False  # Locked when HP = 0 or match not started
+        self.is_locked = False  # Locked when HP = 0 or match not started (legacy)
         self.robot_id = rospy.get_param('~robot_id', 'robot_1')
         self.is_firing = False  # Track firing state
+        
+        # --- Control Permissions (Detailed Lock System) ---
+        self.permissions = {
+            'movement': False,  # Разрешено ли движение
+            'head': True,       # Разрешено ли управление головой
+            'firing': False,    # Разрешено ли стрельба
+            'camera': True      # Разрешен ли доступ к камере
+        }
+        self.use_detailed_permissions = False  # Флаг использования детальных разрешений
         
         # --- Serial Port Configuration ---
         self.serial_port = None
@@ -209,6 +218,7 @@ class JoystickController:
         self.reconnect_serial()
         
         try:
+            import pygame.mixer
             pygame.mixer.init()
             sound_file_path = os.path.abspath("/home/ubuntu/ros_ws/src/proverka_nod/scripts/FIRED.wav")
             if os.path.exists(sound_file_path):
@@ -216,8 +226,12 @@ class JoystickController:
                 rospy.loginfo(f"Sound file loaded: {sound_file_path}")
             else:
                 rospy.logwarn(f"Sound file not found: {sound_file_path}")
+        except ImportError:
+            rospy.logwarn("pygame module not available - sound features disabled")
+            self.sound = None
         except Exception as e:
             rospy.logwarn(f"Failed to initialize pygame mixer or load sound: {e}")
+            self.sound = None
         
         # Game-related publishers
         self.hit_detection_pub = rospy.Publisher('/game/hit_detection', String, queue_size=10)
@@ -227,7 +241,8 @@ class JoystickController:
         
         # Game-related subscribers
         self.damage_sub = rospy.Subscriber('/game/validated_damage', Int32, self.damage_callback)
-        self.control_lock_sub = rospy.Subscriber('/game/control_lock', Bool, self.control_lock_callback)
+        self.control_lock_sub = rospy.Subscriber('/game/control_lock', Bool, self.control_lock_callback)  # Legacy
+        self.control_permissions_sub = rospy.Subscriber('/game/control_permissions', String, self.control_permissions_callback)
         
         # Initialize serial reader thread with hit detection publisher
         # Pass getter function instead of direct reference
@@ -255,23 +270,80 @@ class JoystickController:
             # Lock robot if HP reaches 0
             if self.current_hp <= 0:
                 self.is_locked = True
+                # Блокируем все разрешения кроме камеры при HP = 0
+                self.permissions['movement'] = False
+                self.permissions['head'] = False
+                self.permissions['firing'] = False
+                self.permissions['camera'] = True  # Камера остается доступной
                 rospy.logwarn("Robot HP reached 0. Robot is now locked.")
+                # Останавливаем движение
+                if self.status == 'move':
+                    self.status = 'stop'
+                    self.gait_manager.stop()
                 self.publish_robot_status("hp_zero_locked")
             
             # Publish updated HP immediately
             self.publish_hp_status(None)
 
+    def control_permissions_callback(self, msg):
+        """Handle detailed control permissions from server."""
+        try:
+            data = json.loads(msg.data)
+            # Обновляем только те разрешения, которые пришли в сообщении
+            if 'movement' in data:
+                self.permissions['movement'] = bool(data['movement'])
+            if 'head' in data:
+                self.permissions['head'] = bool(data['head'])
+            if 'firing' in data:
+                self.permissions['firing'] = bool(data['firing'])
+            if 'camera' in data:
+                self.permissions['camera'] = bool(data['camera'])
+            
+            self.use_detailed_permissions = True
+            rospy.loginfo(f"Updated permissions: movement={self.permissions['movement']}, head={self.permissions['head']}, firing={self.permissions['firing']}, camera={self.permissions['camera']}")
+            
+            # Останавливаем движение, если оно было заблокировано
+            if not self.permissions['movement'] and self.status == 'move':
+                self.status = 'stop'
+                self.gait_manager.stop()
+                rospy.logwarn("Movement stopped due to permission change")
+            
+            self.publish_robot_status("permissions_changed")
+        except json.JSONDecodeError as e:
+            rospy.logerr(f"Error parsing control permissions JSON: {e}")
+        except Exception as e:
+            rospy.logerr(f"Error processing control permissions: {e}")
+    
     def control_lock_callback(self, msg):
-        """Handle control lock/unlock commands from server."""
+        """Handle legacy control lock/unlock commands from server (backward compatibility)."""
+        # Если используются детальные разрешения, игнорируем legacy команды
+        if self.use_detailed_permissions:
+            rospy.logdebug("Ignoring legacy control_lock message - using detailed permissions")
+            return
+        
         self.is_locked = msg.data
         if self.is_locked:
-            rospy.loginfo("Robot control locked by server.")
+            # Полная блокировка (legacy)
+            self.permissions = {
+                'movement': False,
+                'head': False,
+                'firing': False,
+                'camera': True  # Камера остается доступной
+            }
+            rospy.loginfo("Robot control locked by server (legacy mode).")
             # Stop movement if locked
             if self.status == 'move':
                 self.status = 'stop'
                 self.gait_manager.stop()
         else:
-            rospy.loginfo("Robot control unlocked by server.")
+            # Полная разблокировка (legacy)
+            self.permissions = {
+                'movement': True,
+                'head': True,
+                'firing': True,
+                'camera': True
+            }
+            rospy.loginfo("Robot control unlocked by server (legacy mode).")
         self.publish_robot_status("lock_changed" if self.is_locked else "unlock_changed")
 
     def publish_hp_status(self, event):
@@ -293,6 +365,34 @@ class JoystickController:
         status_msg.data = json.dumps(status_data)
         self.robot_status_pub.publish(status_msg)
 
+    def can_move(self):
+        """Проверка разрешения на движение."""
+        if self.use_detailed_permissions:
+            return self.permissions['movement']
+        else:
+            return not self.is_locked
+    
+    def can_control_head(self):
+        """Проверка разрешения на управление головой."""
+        if self.use_detailed_permissions:
+            return self.permissions['head']
+        else:
+            return not self.is_locked
+    
+    def can_fire(self):
+        """Проверка разрешения на стрельбу."""
+        if self.use_detailed_permissions:
+            return self.permissions['firing']
+        else:
+            return not self.is_locked
+    
+    def can_access_camera(self):
+        """Проверка разрешения на доступ к камере."""
+        if self.use_detailed_permissions:
+            return self.permissions['camera']
+        else:
+            return True  # Камера всегда доступна в legacy режиме
+    
     def health_check_service(self, req):
         """Service handler for robot health check."""
         response = TriggerResponse()
@@ -300,10 +400,16 @@ class JoystickController:
             ser = self.get_serial_port()
             arduino_connected = ser is not None and ser.is_open if ser else False
             
+            # Определяем состояние блокировки на основе разрешений
+            if self.use_detailed_permissions:
+                locked = not (self.permissions['movement'] or self.permissions['firing'])
+            else:
+                locked = self.is_locked
+            
             health_data = {
                 'available': True,
                 'hp': self.current_hp,
-                'locked': self.is_locked,
+                'locked': locked,
                 'connected': arduino_connected,
                 'robot_id': self.robot_id
             }
@@ -368,11 +474,12 @@ class JoystickController:
 
     def axes_callback(self, axes):
         """Calculates and sets walking parameters based on speed mode and joystick input."""
-        # Block control if robot is locked
-        if self.is_locked:
+        # Проверка разрешения на движение
+        if not self.can_move():
             if self.status == 'move':
                 self.status = 'stop'
                 self.gait_manager.stop()
+                rospy.logwarn("Movement command blocked - no permission")
             return
         
         self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude = 0, 0, 0
@@ -442,8 +549,10 @@ class JoystickController:
             self.board.set_buzzer(1500, 0.1, 0.05, 1)
 
     def cross_callback(self, new_state):
-        # Block firing if robot is locked
-        if self.is_locked:
+        # Проверка разрешения на стрельбу
+        if not self.can_fire():
+            if new_state == ButtonState.Pressed:
+                rospy.logwarn("Fire command blocked - no permission")
             return
         
         ser = self.get_serial_port()
