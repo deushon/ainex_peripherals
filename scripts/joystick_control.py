@@ -243,6 +243,7 @@ class JoystickController:
         self.damage_sub = rospy.Subscriber('/game/validated_damage', Int32, self.damage_callback)
         self.control_lock_sub = rospy.Subscriber('/game/control_lock', Bool, self.control_lock_callback)  # Legacy
         self.control_permissions_sub = rospy.Subscriber('/game/control_permissions', String, self.control_permissions_callback)
+        self.match_start_sub = rospy.Subscriber('/game/match_start', Bool, self.match_start_callback)
         
         # Initialize serial reader thread with hit detection publisher
         # Pass getter function instead of direct reference
@@ -254,6 +255,9 @@ class JoystickController:
         # Health check service
         self.health_service = rospy.Service('/game/robot_health', Trigger, self.health_check_service)
         
+        # Reset HP service
+        self.reset_hp_service = rospy.Service('/game/reset_hp', Trigger, self.reset_hp_service_handler)
+        
         # Start HP publishing timer (1-2Hz)
         self.hp_timer = rospy.Timer(rospy.Duration(0.5), self.publish_hp_status)
         
@@ -263,27 +267,34 @@ class JoystickController:
     def damage_callback(self, msg):
         """Handle validated damage from server."""
         damage_amount = msg.data
-        if damage_amount > 0:
-            self.current_hp = max(0, self.current_hp - damage_amount)
-            rospy.loginfo(f"Received validated damage: {damage_amount}. Current HP: {self.current_hp}")
-            
-            # Lock robot if HP reaches 0
-            if self.current_hp <= 0:
-                self.is_locked = True
-                # Блокируем все разрешения кроме камеры при HP = 0
-                self.permissions['movement'] = False
-                self.permissions['head'] = False
-                self.permissions['firing'] = False
-                self.permissions['camera'] = True  # Камера остается доступной
-                rospy.logwarn("Robot HP reached 0. Robot is now locked.")
-                # Останавливаем движение
-                if self.status == 'move':
-                    self.status = 'stop'
-                    self.gait_manager.stop()
-                self.publish_robot_status("hp_zero_locked")
-            
-            # Publish updated HP immediately
-            self.publish_hp_status(None)
+        if damage_amount <= 0:
+            return
+        
+        old_hp = self.current_hp
+        self.current_hp = max(0, self.current_hp - damage_amount)
+        
+        rospy.loginfo(f"💥 Damage received: {damage_amount}, HP: {old_hp} → {self.current_hp}")
+        
+        # КРИТИЧЕСКИ ВАЖНО: Публиковать обновленное HP сразу после получения урона
+        hp_msg = Int32()
+        hp_msg.data = self.current_hp
+        self.hp_pub.publish(hp_msg)
+        rospy.loginfo(f"📤 Published HP update: {self.current_hp}")
+        
+        # Если HP достигло 0, заблокировать робота
+        if self.current_hp <= 0:
+            self.is_locked = True
+            # Блокируем все разрешения кроме камеры при HP = 0
+            self.permissions['movement'] = False
+            self.permissions['head'] = False
+            self.permissions['firing'] = False
+            self.permissions['camera'] = True  # Камера остается доступной
+            rospy.logwarn(f"💀 Robot HP reached 0, locking robot")
+            # Останавливаем движение
+            if self.status == 'move':
+                self.status = 'stop'
+                self.gait_manager.stop()
+            self.publish_robot_status("hp_zero_locked")
 
     def control_permissions_callback(self, msg):
         """Handle detailed control permissions from server."""
@@ -347,10 +358,47 @@ class JoystickController:
         self.publish_robot_status("lock_changed" if self.is_locked else "unlock_changed")
 
     def publish_hp_status(self, event):
-        """Publish current HP status to server."""
+        """Публикует HP каждые 0.5 секунды (2Hz) для синхронизации."""
         hp_msg = Int32()
         hp_msg.data = self.current_hp
         self.hp_pub.publish(hp_msg)
+
+    def reset_hp(self):
+        """Сбросить HP на 100 (вызывается при начале нового матча)."""
+        self.current_hp = 100
+        hp_msg = Int32()
+        hp_msg.data = self.current_hp
+        self.hp_pub.publish(hp_msg)
+        rospy.loginfo(f"💚 HP reset to 100")
+        
+        # Разблокировать робота при сбросе HP
+        self.is_locked = False
+        self.permissions = {
+            'movement': True,
+            'head': True,
+            'firing': True,
+            'camera': True
+        }
+        self.publish_robot_status("hp_reset")
+
+    def match_start_callback(self, msg):
+        """Обработчик начала нового матча."""
+        if msg.data:  # Если матч начался
+            rospy.loginfo("🎮 Match started, resetting HP")
+            self.reset_hp()
+
+    def reset_hp_service_handler(self, req):
+        """Service handler для сброса HP."""
+        response = TriggerResponse()
+        try:
+            self.reset_hp()
+            response.success = True
+            response.message = "HP reset to 100"
+        except Exception as e:
+            response.success = False
+            response.message = f"Error resetting HP: {str(e)}"
+            rospy.logerr(response.message)
+        return response
 
     def publish_robot_status(self, status_type):
         """Publish general robot status to server."""
