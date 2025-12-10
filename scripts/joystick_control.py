@@ -165,7 +165,7 @@ class JoystickController:
         # Y- = падение назад, Y+ = падение вперед
         # X+ = вправо, X- = влево
         
-        self.accel_change_threshold = 0.2  # Порог ИЗМЕНЕНИЯ ускорения (м/с²) для балансировки - строгий порог
+        self.accel_change_threshold = 0.25  # Порог ИЗМЕНЕНИЯ ускорения (м/с²) для балансировки - строгий порог
         self.accel_change_min_threshold = 0.1  # Минимальный порог изменения - игнорируем шум
         self.auto_step_amplitude_base = 0.008  # Базовая амплитуда автоматического шага (увеличена)
         self.auto_step_amplitude_lateral_base = 0.006  # Базовая амплитуда для шагов влево/вправо (увеличена)
@@ -177,7 +177,7 @@ class JoystickController:
         self.balance_step_count = 0  # Счетчик шагов: 0 = нет шагов, 1 = первый быстрый, 2 = второй медленный
         self.last_balance_direction = None  # Направление последнего шага балансировки ('forward', 'backward', 'left', 'right')
         self.balance_cooldown_end_time = 0  # Время окончания охлаждения после завершения балансировки (сек)
-        self.balance_cooldown_duration = 1.0  # Длительность охлаждения после завершения балансировки (сек)
+        self.balance_cooldown_duration = 2  # Длительность охлаждения после завершения балансировки (сек)
         
         # История ориентации для анализа наклона (roll и pitch)
         self.orientation_history = {
