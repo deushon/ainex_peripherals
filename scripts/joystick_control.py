@@ -145,6 +145,7 @@ class JoystickController:
         self.count_lie = 0
         self.count_recline = 0
         self.FALL_COUNT_THRESHOLD = 50
+        self.fall_check_cooldown = 0  # Задержка после подъема перед следующей проверкой падения
 
         # --- IMU-based gait adaptation variables ---
         # История IMU данных для расчета амплитуды
@@ -164,26 +165,40 @@ class JoystickController:
         # Y- = падение назад, Y+ = падение вперед
         # X+ = вправо, X- = влево
         
-        self.accel_threshold = 0.3  # Порог линейного ускорения (м/с²) для балансировки (снижен для быстрой реакции)
-        self.accel_min_threshold = 0.1  # Минимальный порог - игнорируем шум (снижен)
-        self.auto_step_amplitude_base = 0.005  # Базовая амплитуда автоматического шага
-        self.auto_step_amplitude_lateral_base = 0.004  # Базовая амплитуда для шагов влево/вправо
-        self.auto_step_amplitude_max = 0.015  # Максимальная амплитуда шага (при большом отклонении)
+        self.orientation_threshold = 0.012  # Порог наклона (рад) для балансировки (примерно 0.69 градуса) - повышена чувствительность
+        self.orientation_min_threshold = 0.006  # Минимальный порог - игнорируем шум (примерно 0.34 градуса) - повышена чувствительность
+        
+        # Референсная ориентация для вычисления относительных углов (как в визуализаторе)
+        self.orientation_reference = None  # Будет установлена после калибровки
+        
+        # Флаги инверсии осей (если нужно инвертировать направление)
+        self.invert_roll = False  # Инвертировать roll (если направление неправильное)
+        self.invert_pitch = False  # Инвертировать pitch (если направление неправильное)
+        self.auto_step_amplitude_base = 0.008  # Базовая амплитуда автоматического шага (увеличена)
+        self.auto_step_amplitude_lateral_base = 0.006  # Базовая амплитуда для шагов влево/вправо (увеличена)
+        self.auto_step_amplitude_max = 0.020  # Максимальная амплитуда шага (увеличена)
         self.accel_max_for_max_step = 2.0  # Максимальное отклонение ускорения для максимального шага
         self.last_auto_step_time = 0
         self.auto_step_interval = 0.6  # Интервал между шагами (сек) - даем время на реакцию
+        self.auto_step_interval_first = 0.2  # Интервал для первого шага (быстрее реакция)
         self.consecutive_auto_steps = 0  # Счетчик последовательных автоматических шагов
         self.max_consecutive_auto_steps = 2  # Максимум последовательных шагов (чаще всего 1)
         self.auto_balance_timeout = 3.0  # Таймаут после достижения максимума шагов (сек) - больше окно
         self.auto_balance_timeout_start = 0  # Время начала таймаута
         self.last_balance_direction = None  # Направление последнего шага балансировки ('forward', 'backward', 'left', 'right')
         
-        # История линейных ускорений для анализа вектора и направления
-        self.accel_history = {
-            'x': [],  # Влево/вправо
-            'y': []   # Вперед/назад
+        # История ориентации для анализа наклона (roll и pitch)
+        self.orientation_history = {
+            'roll': [],   # Вперед/назад (ROLL + = назад, ROLL - = вперед)
+            'pitch': []   # Влево/вправо (PITCH + = вправо, PITCH - = влево)
         }
-        self.accel_history_size = 15  # Увеличенное окно для анализа (больше данных)
+        self.orientation_history_size = 8  # Размер истории для анализа ориентации
+        
+        # История ускорений (для старой функции, больше не используется, но оставлена для совместимости)
+        self.accel_history = {
+            'x': [],
+            'y': []
+        }
         
         # Калибровка базового значения гравитации и уровня шумов при запуске
         self.gravity_base_y = 9.8  # Начальное значение, будет обновляться при калибровке
@@ -201,6 +216,7 @@ class JoystickController:
         self.fall_start_time = None  # Время начала падения
         self.last_auto_getup_time = 0  # Время последнего автоматического подъема
         self.auto_getup_interval = 5.0  # Минимальный интервал между попытками подъема (сек)
+        self.getup_action_in_progress = False  # Флаг что действие подъема уже выполняется
         
         # Параметры для отслеживания резонанса
         self.resonance_detection_enabled = True
@@ -224,13 +240,13 @@ class JoystickController:
         rospy.loginfo("=" * 60)
         rospy.loginfo("🤖 IMU-based Gait Adaptation System Initialized")
         rospy.loginfo(f"   Auto-balance: enabled={self.auto_balance_enabled}")
-        rospy.loginfo(f"   Auto-balance uses LINEAR ACCELERATION")
-        rospy.loginfo(f"   Acceleration mapping: Y- = backward, Y+ = forward, X+ = right, X- = left")
-        rospy.loginfo(f"   Accel threshold: {self.accel_threshold:.3f} m/s², min (noise): {self.accel_min_threshold:.3f} m/s²")
+        rospy.loginfo(f"   Auto-balance uses ORIENTATION (roll and pitch)")
+        rospy.loginfo(f"   Orientation mapping: ROLL+ = backward, ROLL- = forward, PITCH+ = right, PITCH- = left")
+        rospy.loginfo(f"   Orientation threshold: {self.orientation_threshold:.4f} rad ({math.degrees(self.orientation_threshold):.2f}°), min: {self.orientation_min_threshold:.4f} rad ({math.degrees(self.orientation_min_threshold):.2f}°)")
         rospy.loginfo(f"   Auto-step interval: {self.auto_step_interval}s")
         rospy.loginfo(f"   Auto-step amplitudes: base={self.auto_step_amplitude_base}, max={self.auto_step_amplitude_max}, lateral_base={self.auto_step_amplitude_lateral_base}")
         rospy.loginfo(f"   Max consecutive steps: {self.max_consecutive_auto_steps}, timeout: {self.auto_balance_timeout}s")
-        rospy.loginfo(f"   History window: {self.accel_history_size} samples")
+        rospy.loginfo(f"   History window: {self.orientation_history_size} samples")
         rospy.loginfo(f"   Auto-getup: enabled={self.auto_getup_enabled}, threshold={self.fall_time_threshold}s")
         rospy.loginfo(f"   Resonance detection: enabled={self.resonance_detection_enabled}")
         rospy.loginfo(f"   Resonance thresholds: safe={self.max_safe_amplitude}, critical={self.critical_amplitude}")
@@ -638,6 +654,11 @@ class JoystickController:
                 self.imu_history['pitch'].append(pitch)
                 self.imu_history['yaw'].append(yaw)
                 
+                # Устанавливаем reference ориентацию после калибровки (если еще не установлена)
+                if self.gravity_calibrated and self.orientation_reference is None:
+                    self.orientation_reference = {'roll': roll, 'pitch': pitch, 'yaw': yaw}
+                    rospy.loginfo(f"📐 Orientation reference set: roll={math.degrees(roll):.2f}°, pitch={math.degrees(pitch):.2f}°")
+                
                 # Ограничение размера истории
                 for key in self.imu_history:
                     if len(self.imu_history[key]) > self.imu_history_size:
@@ -655,35 +676,43 @@ class JoystickController:
                     self._perform_startup_calibration(ax, ay)
 
             # Обработка падения (оригинальная логика) - используем ИСХОДНЫЕ значения БЕЗ преобразования
-            ACCEL_THRESH = 7.0
-            ANGLE_THRESH = 30.0
-            COUNT_INCREMENT = 1
-            COUNT_DECREMENT = 1
+            current_time = rospy.get_time()
+            
+            # Нормальная проверка падения (НЕ в период cooldown)
+            if current_time >= self.fall_check_cooldown:
+                ACCEL_THRESH = 7.0
+                ANGLE_THRESH = 30.0
+                COUNT_INCREMENT = 1
+                COUNT_DECREMENT = 2  # Увеличена скорость сброса
 
-            if abs(az_original) > 1e-6:
-                angle_rad = math.atan2(abs(ay_original), abs(az_original))
-                angle_deg = math.degrees(angle_rad)
-            else:
-                angle_deg = 90.0
-
-            # ЛОГИКА ПАДЕНИЯ: использует ИСХОДНЫЕ ay и az (НЕ изменена, БЕЗ преобразования осей)
-            # az > 7.0 = падение вперед (lie_to_stand)
-            # az < -7.0 = падение назад (recline_to_stand)
-            if angle_deg < ANGLE_THRESH:
-                if az_original > ACCEL_THRESH:
-                    self.count_lie += COUNT_INCREMENT
-                    self.count_recline = max(0, self.count_recline - COUNT_DECREMENT)
-                elif az_original < -ACCEL_THRESH:
-                    self.count_recline += COUNT_INCREMENT
-                    self.count_lie = max(0, self.count_lie - COUNT_DECREMENT)
+                if abs(az_original) > 1e-6:
+                    angle_rad = math.atan2(abs(ay_original), abs(az_original))
+                    angle_deg = math.degrees(angle_rad)
                 else:
-                    # az в нормальном диапазоне - уменьшаем счетчики
+                    angle_deg = 90.0
+
+                # ЛОГИКА ПАДЕНИЯ: использует ИСХОДНЫЕ ay и az (НЕ изменена, БЕЗ преобразования осей)
+                # az > 7.0 = падение вперед (lie_to_stand)
+                # az < -7.0 = падение назад (recline_to_stand)
+                if angle_deg < ANGLE_THRESH:
+                    if az_original > ACCEL_THRESH:
+                        self.count_lie += COUNT_INCREMENT
+                        self.count_recline = max(0, self.count_recline - COUNT_DECREMENT)
+                    elif az_original < -ACCEL_THRESH:
+                        self.count_recline += COUNT_INCREMENT
+                        self.count_lie = max(0, self.count_lie - COUNT_DECREMENT)
+                    else:
+                        # az в нормальном диапазоне - уменьшаем счетчики быстрее
+                        self.count_lie = max(0, self.count_lie - COUNT_DECREMENT)
+                        self.count_recline = max(0, self.count_recline - COUNT_DECREMENT)
+                else:
+                    # Угол нормальный - уменьшаем счетчики быстрее
                     self.count_lie = max(0, self.count_lie - COUNT_DECREMENT)
                     self.count_recline = max(0, self.count_recline - COUNT_DECREMENT)
             else:
-                # Угол нормальный - уменьшаем счетчики
-                self.count_lie = max(0, self.count_lie - COUNT_DECREMENT)
-                self.count_recline = max(0, self.count_recline - COUNT_DECREMENT)
+                # В период cooldown - АГРЕССИВНО сбрасываем счетчики, не увеличиваем
+                self.count_lie = max(0, self.count_lie - 15)  # Очень быстро сбрасываем (увеличено)
+                self.count_recline = max(0, self.count_recline - 15)
 
             old_state = self.robot_state
 
@@ -703,25 +732,38 @@ class JoystickController:
                         self.fall_start_time = rospy.get_time()
                         rospy.logwarn(f"⚠️ Robot fell! State: {self.robot_state}, starting fall timer...")
                 elif self.robot_state == 'stand' and old_state != 'stand':
-                    # Робот встал - сбрасываем данные о падении
+                    # Робот встал - АГРЕССИВНО сбрасываем данные о падении
                     self.fall_start_time = None
                     self.last_auto_getup_time = 0  # Сбрасываем таймер подъема
+                    self.getup_action_in_progress = False  # Сбрасываем флаг выполнения действия
+                    # АГРЕССИВНЫЙ сброс счетчиков падения - ПРИНУДИТЕЛЬНО обнуляем
                     self.count_lie = 0
                     self.count_recline = 0
+                    # Дополнительно: устанавливаем задержку перед следующей проверкой падения
+                    self.fall_check_cooldown = rospy.get_time() + 10.0  # 10 секунд задержки (увеличено)
                     self.consecutive_auto_steps = 0  # Сбрасываем счетчик шагов балансировки
                     self.auto_balance_timeout_start = 0  # Сбрасываем таймаут
                     self.last_balance_direction = None
-                    rospy.loginfo(f"✅ Robot recovered to stand position - all fall/balance data reset")
+                    rospy.loginfo(f"✅ Robot recovered to stand position - all fall/balance data reset. Cooldown: 10.0s, counters forced to 0")
 
             # Новая логика: автоматический подъем при падении
             if self.auto_getup_enabled and self.robot_state != 'stand':
                 self._handle_auto_getup()
 
             # Новая логика: автоматическая балансировка в покое (использует линейные ускорения)
-            # Новая логика: автоматическая балансировка в покое (использует линейные ускорения)
+            # Новая логика: автоматическая балансировка в покое (использует ОРИЕНТАЦИЮ: roll и pitch)
             # Работает только после завершения калибровки
+            # Используем относительную ориентацию (относительно начальной позиции при калибровке)
             if self.auto_balance_enabled and self.robot_state == 'stand' and self.gravity_calibrated:
-                self._handle_auto_balance_accel(ax, ay, pitch, roll)
+                # Вычисляем относительную ориентацию (относительно reference, если установлен)
+                relative_roll = roll
+                relative_pitch = pitch
+                if self.orientation_reference is not None:
+                    # Простое вычисление относительного отклонения (без scipy)
+                    # Используем разницу от reference значений
+                    relative_roll = roll - self.orientation_reference['roll']
+                    relative_pitch = pitch - self.orientation_reference['pitch']
+                self._handle_auto_balance_orientation(relative_pitch, relative_roll)
 
             # Новая логика: обнаружение резонанса и адаптация параметров
             if self.resonance_detection_enabled and self.status == 'move':
@@ -785,15 +827,25 @@ class JoystickController:
     def _handle_auto_getup(self):
         """
         Автоматически вызывает подъем робота, если он упал и лежит дольше заданного времени.
+        ЗАЩИТА ОТ ПОВТОРНЫХ ВЫЗОВОВ: использует флаг getup_action_in_progress.
         """
         if not self.can_move():
             return
         
         current_time = rospy.get_time()
         
+        # КРИТИЧНО: не пытаемся подниматься в период cooldown после подъема
+        if current_time < self.fall_check_cooldown:
+            return
+        
+        # КРИТИЧНО: если действие подъема уже выполняется - не вызываем повторно
+        if self.getup_action_in_progress:
+            return
+        
         # Проверяем, что робот действительно упал
         if self.robot_state == 'stand':
             self.fall_start_time = None
+            self.getup_action_in_progress = False
             return
         
         # Если время начала падения не установлено, устанавливаем его
@@ -819,17 +871,216 @@ class JoystickController:
                     action_to_run = self.recline_to_stand_action_name
                 
                 if action_to_run and self.motion_manager is not None:
+                    # УСТАНАВЛИВАЕМ ФЛАГ ПЕРЕД ВЫЗОВОМ - защита от повторных вызовов
+                    self.getup_action_in_progress = True
                     rospy.loginfo(f"🤖 Executing auto-getup action: {action_to_run}")
                     self.motion_manager.run_action(action_to_run)
                     self.last_auto_getup_time = current_time
                     # НЕ сбрасываем fall_start_time сразу - ждем подтверждения что робот встал
                     # Сброс произойдет в imu_callback когда robot_state станет 'stand'
-                    rospy.loginfo(f"✅ Auto-getup action '{action_to_run}' initiated")
+                    rospy.loginfo(f"✅ Auto-getup action '{action_to_run}' initiated (flag set to prevent duplicate calls)")
                 else:
                     rospy.logwarn(f"⚠️ Cannot execute auto-getup: action={action_to_run}, motion_manager={self.motion_manager is not None}")
             except Exception as e:
                 rospy.logerr(f"❌ Error in auto-getup: {e}")
                 self.last_auto_getup_time = current_time  # Все равно обновляем время, чтобы не спамить
+                self.getup_action_in_progress = False  # Сбрасываем флаг при ошибке
+
+    def _handle_auto_balance_orientation(self, pitch, roll):
+        """
+        Обрабатывает автоматическую балансировку в состоянии покоя используя ОРИЕНТАЦИЮ (roll и pitch).
+        УПРОЩЕННАЯ ЛОГИКА: используем АБСОЛЮТНЫЕ значения отклонения от reference, а не изменение.
+        
+        ROLL + (наклон назад) = падение назад → нужен шаг назад (step_x отрицательное)
+        ROLL - (наклон вперед) = падение вперед → нужен шаг вперед (step_x положительное)
+        PITCH + (наклон вправо) = падение вправо → нужен шаг вправо (step_y положительное)
+        PITCH - (наклон влево) = падение влево → нужен шаг влево (step_y отрицательное)
+        
+        КРИТИЧНО: Работает ТОЛЬКО когда робот в покое и НЕТ команд от джойстика.
+        НЕ работает если робот упал (robot_state != 'stand').
+        """
+        if not self.can_move():
+            return
+        
+        current_time = rospy.get_time()
+        
+        # КРИТИЧНО: балансировка НЕ работает если робот упал или начинает падать
+        # Проверяем не только robot_state, но и счетчики падения для раннего обнаружения
+        if (self.robot_state != 'stand' or 
+            self.count_lie > 10 or 
+            self.count_recline > 10):
+            if self.consecutive_auto_steps > 0:
+                rospy.logdebug(f"🛑 Auto-balance disabled: robot state={self.robot_state}, lie_count={self.count_lie}, recline_count={self.count_recline}")
+            self.consecutive_auto_steps = 0
+            self.auto_balance_timeout_start = 0
+            self.last_balance_direction = None
+            self.orientation_history = {'roll': [], 'pitch': []}  # Очищаем историю
+            return
+        
+        # СТРОГАЯ ПРОВЕРКА: балансировка НЕ должна работать при управлении джойстиком
+        if (self.status != 'stop' or 
+            self.update_param or 
+            abs(self.x_move_amplitude) > 0.001 or 
+            abs(self.y_move_amplitude) > 0.001 or 
+            abs(self.angle_move_amplitude) > 0.001):
+            # Есть команды от джойстика - полностью отключаем балансировку
+            if self.consecutive_auto_steps > 0:
+                rospy.logdebug(f"🛑 Auto-balance disabled: joystick control active")
+            self.consecutive_auto_steps = 0
+            self.auto_balance_timeout_start = 0
+            self.last_balance_direction = None
+            self.orientation_history = {'roll': [], 'pitch': []}  # Очищаем историю
+            return
+        
+        # Проверяем таймаут после достижения максимума шагов
+        if self.consecutive_auto_steps >= self.max_consecutive_auto_steps:
+            if self.auto_balance_timeout_start == 0:
+                self.auto_balance_timeout_start = current_time
+                rospy.logwarn(f"⏸️ Auto-balance: Reached max steps ({self.consecutive_auto_steps}), starting timeout ({self.auto_balance_timeout}s)")
+            
+            # Если таймаут еще не истек, ждем
+            if current_time - self.auto_balance_timeout_start < self.auto_balance_timeout:
+                return
+            
+            # Таймаут истек - проверяем результат
+            if self.robot_state != 'stand':
+                rospy.logwarn(f"⚠️ Auto-balance timeout: Robot fell after {self.consecutive_auto_steps} steps")
+                self.consecutive_auto_steps = 0
+                self.auto_balance_timeout_start = 0
+                self.last_balance_direction = None
+                self.orientation_history = {'roll': [], 'pitch': []}
+                return
+            else:
+                rospy.loginfo(f"✅ Auto-balance timeout: Robot stable after {self.consecutive_auto_steps} steps, resetting")
+                self.consecutive_auto_steps = 0
+                self.auto_balance_timeout_start = 0
+                self.last_balance_direction = None
+                self.orientation_history = {'roll': [], 'pitch': []}
+        
+        # УПРОЩЕННАЯ ЛОГИКА: используем АБСОЛЮТНЫЕ значения отклонения от reference
+        # Если reference не установлен, используем текущие значения как reference
+        if self.orientation_reference is None:
+            self.orientation_reference = {'roll': roll, 'pitch': pitch}
+            rospy.loginfo(f"📐 Orientation reference initialized: roll={math.degrees(roll):.2f}°, pitch={math.degrees(pitch):.2f}°")
+            return
+        
+        # Вычисляем отклонение от reference (относительная ориентация)
+        roll_deviation = roll - self.orientation_reference['roll']
+        pitch_deviation = pitch - self.orientation_reference['pitch']
+        
+        # Применяем инверсию осей если нужно
+        if self.invert_roll:
+            roll_deviation = -roll_deviation
+        if self.invert_pitch:
+            pitch_deviation = -pitch_deviation
+        
+        # Добавляем в историю отклонения (не абсолютные значения)
+        self.orientation_history['roll'].append(roll_deviation)
+        self.orientation_history['pitch'].append(pitch_deviation)
+        
+        # Ограничиваем размер истории
+        for key in self.orientation_history:
+            if len(self.orientation_history[key]) > self.orientation_history_size:
+                self.orientation_history[key].pop(0)
+        
+        # Нужно достаточно данных для анализа (минимум 3)
+        if len(self.orientation_history['roll']) < 3:
+            return
+        
+        # Берем среднее из последних значений для сглаживания
+        recent_roll = self.orientation_history['roll'][-3:]
+        recent_pitch = self.orientation_history['pitch'][-3:]
+        avg_roll_dev = sum(recent_roll) / len(recent_roll)
+        avg_pitch_dev = sum(recent_pitch) / len(recent_pitch)
+        
+        # Проверяем качание: если знак меняется часто - это качание
+        if len(self.orientation_history['roll']) >= 5:
+            extended_roll = self.orientation_history['roll'][-5:]
+            extended_pitch = self.orientation_history['pitch'][-5:]
+            roll_sign_changes = sum(1 for i in range(len(extended_roll)-1) if (extended_roll[i] >= 0) != (extended_roll[i+1] >= 0))
+            pitch_sign_changes = sum(1 for i in range(len(extended_pitch)-1) if (extended_pitch[i] >= 0) != (extended_pitch[i+1] >= 0))
+            
+            if roll_sign_changes >= 2 or pitch_sign_changes >= 2:
+                if self.consecutive_auto_steps > 0:
+                    rospy.logdebug(f"🔄 Auto-balance: Oscillating detected (roll_changes={roll_sign_changes}, pitch_changes={pitch_sign_changes}), resetting")
+                self.consecutive_auto_steps = 0
+                self.auto_balance_timeout_start = 0
+                self.last_balance_direction = None
+                return
+        
+        # Проверяем, что отклонение значительное
+        if abs(avg_roll_dev) < self.orientation_threshold and abs(avg_pitch_dev) < self.orientation_threshold:
+            if self.consecutive_auto_steps > 0:
+                rospy.logdebug(f"✅ Auto-balance: Stable (roll_dev={avg_roll_dev:.4f}, pitch_dev={avg_pitch_dev:.4f}), resetting")
+            self.consecutive_auto_steps = 0
+            self.auto_balance_timeout_start = 0
+            self.last_balance_direction = None
+            return
+        
+        # Определяем направление по АБСОЛЮТНОМУ отклонению от reference
+        # ROLL + (наклон назад) = падение назад → нужен шаг назад (step_x отрицательное)
+        # ROLL - (наклон вперед) = падение вперед → нужен шаг вперед (step_x положительное)
+        # PITCH + (наклон вправо) = падение вправо → нужен шаг вправо (step_y положительное)
+        # PITCH - (наклон влево) = падение влево → нужен шаг влево (step_y отрицательное)
+        
+        direction = None
+        step_x = 0
+        step_y = 0
+        deviation_magnitude = 0.0
+        
+        # Приоритет: сначала вперед/назад (roll), потом влево/вправо (pitch)
+        if abs(avg_roll_dev) > abs(avg_pitch_dev):
+            # Доминирует отклонение вперед/назад
+            if avg_roll_dev > self.orientation_threshold:
+                direction = 'backward'
+                deviation_magnitude = abs(avg_roll_dev)
+                step_amplitude = self._calculate_dynamic_amplitude_orientation(deviation_magnitude, self.auto_step_amplitude_base, self.auto_step_amplitude_max)
+                step_x = -step_amplitude  # x_move_amplitude: отрицательное = назад
+            elif avg_roll_dev < -self.orientation_threshold:
+                direction = 'forward'
+                deviation_magnitude = abs(avg_roll_dev)
+                step_amplitude = self._calculate_dynamic_amplitude_orientation(deviation_magnitude, self.auto_step_amplitude_base, self.auto_step_amplitude_max)
+                step_x = step_amplitude  # x_move_amplitude: положительное = вперед
+        else:
+            # Доминирует отклонение влево/вправо
+            if avg_pitch_dev > self.orientation_threshold:
+                direction = 'right'
+                deviation_magnitude = abs(avg_pitch_dev)
+                step_amplitude = self._calculate_dynamic_amplitude_orientation(deviation_magnitude, self.auto_step_amplitude_lateral_base, self.auto_step_amplitude_max)
+                step_y = step_amplitude  # y_move_amplitude: положительное = вправо
+            elif avg_pitch_dev < -self.orientation_threshold:
+                direction = 'left'
+                deviation_magnitude = abs(avg_pitch_dev)
+                step_amplitude = self._calculate_dynamic_amplitude_orientation(deviation_magnitude, self.auto_step_amplitude_lateral_base, self.auto_step_amplitude_max)
+                step_y = -step_amplitude  # y_move_amplitude: отрицательное = влево
+        
+        # Если отклонение слишком мало - сбрасываем счетчик
+        if direction is None:
+            if self.consecutive_auto_steps > 0:
+                rospy.logdebug(f"✅ Auto-balance: Stable (roll_dev={avg_roll_dev:.4f}, pitch_dev={avg_pitch_dev:.4f}), resetting")
+            self.consecutive_auto_steps = 0
+            self.auto_balance_timeout_start = 0
+            self.last_balance_direction = None
+            return
+        
+        # Проверяем, прошло ли достаточно времени с последнего шага
+        # Первый шаг делаем быстрее
+        step_interval = self.auto_step_interval_first if self.consecutive_auto_steps == 0 else self.auto_step_interval
+        if current_time - self.last_auto_step_time < step_interval:
+            return
+        
+        # Если направление изменилось, сбрасываем счетчик (робот качается)
+        if self.last_balance_direction is not None and self.last_balance_direction != direction:
+            rospy.loginfo(f"🔄 Auto-balance: Direction changed from {self.last_balance_direction} to {direction}, resetting counter")
+            self.consecutive_auto_steps = 0
+            self.auto_balance_timeout_start = 0
+        
+        # Выполняем шаг
+        rospy.loginfo(f"🤖 Auto-balance: Robot tilting {direction} (roll_dev={avg_roll_dev:.4f} rad/{math.degrees(avg_roll_dev):.2f}°, pitch_dev={avg_pitch_dev:.4f} rad/{math.degrees(avg_pitch_dev):.2f}°, magnitude={deviation_magnitude:.4f} rad), making step (consecutive: {self.consecutive_auto_steps + 1}/{self.max_consecutive_auto_steps})")
+        self._make_auto_step_2d(step_x, step_y, fast=(self.consecutive_auto_steps > 0))
+        self.last_auto_step_time = current_time
+        self.consecutive_auto_steps += 1
+        self.last_balance_direction = direction
 
     def _handle_auto_balance_accel(self, ax, ay, pitch, roll):
         """
@@ -854,7 +1105,7 @@ class JoystickController:
             self.consecutive_auto_steps = 0
             self.auto_balance_timeout_start = 0
             self.last_balance_direction = None
-            self.accel_history = {'x': [], 'y': []}  # Очищаем историю
+            self.orientation_history = {'roll': [], 'pitch': []}  # Очищаем историю
             return
         
         # СТРОГАЯ ПРОВЕРКА: балансировка НЕ должна работать при управлении джойстиком
@@ -869,7 +1120,7 @@ class JoystickController:
             self.consecutive_auto_steps = 0
             self.auto_balance_timeout_start = 0
             self.last_balance_direction = None
-            self.accel_history = {'x': [], 'y': []}  # Очищаем историю
+            self.orientation_history = {'roll': [], 'pitch': []}  # Очищаем историю
             return
         
         # Проверяем таймаут после достижения максимума шагов
@@ -901,19 +1152,19 @@ class JoystickController:
         self.accel_history['x'].append(ax)
         self.accel_history['y'].append(ay)
         
-        # Ограничиваем размер истории
+        # Ограничиваем размер истории (старая функция, больше не используется)
         for key in self.accel_history:
-            if len(self.accel_history[key]) > self.accel_history_size:
+            if len(self.accel_history[key]) > 10:  # Используем фиксированное значение для старой функции
                 self.accel_history[key].pop(0)
         
-        # Нужно достаточно данных для анализа вектора
-        if len(self.accel_history['x']) < 5:
+        # Нужно достаточно данных для анализа вектора (уменьшено для быстрой реакции)
+        if len(self.accel_history['x']) < 3:
             return
         
-        # Анализируем вектор ускорения - смотрим на последние значения
+        # Анализируем вектор ускорения - смотрим на последние значения (меньше окно для быстрой реакции)
         # Берем среднее из последних значений для определения направления
-        recent_x = self.accel_history['x'][-5:]
-        recent_y = self.accel_history['y'][-5:]
+        recent_x = self.accel_history['x'][-3:]
+        recent_y = self.accel_history['y'][-3:]
         
         avg_x = sum(recent_x) / len(recent_x)
         avg_y_raw = sum(recent_y) / len(recent_y)
@@ -923,15 +1174,15 @@ class JoystickController:
         
         # КРИТИЧНО: проверяем ИЗМЕНЕНИЕ отклонения, а не абсолютное значение
         # Если отклонение постоянно в одном направлении без изменений - это не падение
-        # Используем уровень шума, определенный при калибровке
-        if len(self.accel_history['y']) >= 10:
+        # Используем уровень шума, определенный при калибровке (уменьшено окно для быстрой реакции)
+        if len(self.accel_history['y']) >= 6:
             # Вычисляем изменение отклонения (производную)
             recent_y_deviations = [y - self.gravity_base_y for y in recent_y]
-            if len(recent_y_deviations) >= 3:
+            if len(recent_y_deviations) >= 2:
                 # Изменение отклонения (разница между последними значениями)
-                deviation_change = abs(recent_y_deviations[-1] - recent_y_deviations[-3])
-                # Порог изменения основан на уровне шума (минимум 0.15)
-                change_threshold = max(0.15, self.noise_level_y * 2.0)
+                deviation_change = abs(recent_y_deviations[-1] - recent_y_deviations[0])
+                # Порог изменения основан на уровне шума (минимум снижен для чувствительности)
+                change_threshold = max(0.08, self.noise_level_y * 1.5)
                 # Если отклонение не меняется (стабильно в пределах шума), не балансируем
                 if deviation_change < change_threshold:
                     if self.consecutive_auto_steps > 0:
@@ -945,24 +1196,24 @@ class JoystickController:
         # Вычисляем изменение ускорения (производную) - разницу между последними значениями
         # Это позволяет ловить толчки/качания, а не реагировать на постоянные смещения
         
-        if len(self.accel_history['x']) < 8 or len(self.accel_history['y']) < 8:
-            return  # Нужно больше данных для анализа изменений
+        if len(self.accel_history['x']) < 5 or len(self.accel_history['y']) < 5:
+            return  # Нужно минимум данных для анализа изменений (уменьшено для быстрой реакции)
         
-        # Берем более длинную историю для анализа изменений
-        extended_x = self.accel_history['x'][-8:]
-        extended_y = self.accel_history['y'][-8:]
+        # Берем более короткую историю для анализа изменений (быстрее реакция)
+        extended_x = self.accel_history['x'][-5:]
+        extended_y = self.accel_history['y'][-5:]
         
         # Вычисляем изменение ускорения (разница между последними и предыдущими значениями)
-        # Используем разницу между средними из последних 3 и предыдущих 3 значений
-        recent_3_x = extended_x[-3:]
-        recent_3_y = extended_y[-3:]
-        prev_3_x = extended_x[-6:-3] if len(extended_x) >= 6 else extended_x[:3]
-        prev_3_y = extended_y[-6:-3] if len(extended_y) >= 6 else extended_y[:3]
+        # Используем разницу между средними из последних 2 и предыдущих 2 значений (быстрее)
+        recent_2_x = extended_x[-2:]
+        recent_2_y = extended_y[-2:]
+        prev_2_x = extended_x[:2] if len(extended_x) >= 4 else extended_x[:1]
+        prev_2_y = extended_y[:2] if len(extended_y) >= 4 else extended_y[:1]
         
-        avg_recent_x = sum(recent_3_x) / len(recent_3_x)
-        avg_recent_y = sum(recent_3_y) / len(recent_3_y)
-        avg_prev_x = sum(prev_3_x) / len(prev_3_x) if prev_3_x else avg_recent_x
-        avg_prev_y = sum(prev_3_y) / len(prev_3_y) if prev_3_y else avg_recent_y
+        avg_recent_x = sum(recent_2_x) / len(recent_2_x)
+        avg_recent_y = sum(recent_2_y) / len(recent_2_y)
+        avg_prev_x = sum(prev_2_x) / len(prev_2_x) if prev_2_x else avg_recent_x
+        avg_prev_y = sum(prev_2_y) / len(prev_2_y) if prev_2_y else avg_recent_y
         
         # Изменение ускорения (производная)
         change_x = avg_recent_x - avg_prev_x
@@ -973,9 +1224,30 @@ class JoystickController:
         max_change_y = max(abs((y - self.gravity_base_y) - (extended_y[0] - self.gravity_base_y)) for y in extended_y) if extended_y else 0.0
         
         # Проверяем, что изменение значительное (не шум)
-        # Используем порог, основанный на уровне шума
-        change_threshold_x = max(self.accel_threshold, self.noise_level_x * 3.0)
-        change_threshold_y = max(self.accel_threshold, self.noise_level_y * 3.0)
+        # Используем порог, основанный на уровне шума (сильно снижен для чувствительности)
+        change_threshold_x = max(self.accel_threshold * 0.5, self.noise_level_x * 1.5)
+        change_threshold_y = max(self.accel_threshold * 0.5, self.noise_level_y * 1.5)
+        
+        # УЛУЧШЕННАЯ проверка качания: анализируем частоту изменения знака
+        # Если знак меняется часто - это качание, не делаем шаг
+        if len(extended_x) >= 4 and len(extended_y) >= 4:
+            x_sign_changes = 0
+            y_sign_changes = 0
+            for i in range(len(extended_x) - 1):
+                if (extended_x[i] >= 0) != (extended_x[i+1] >= 0):
+                    x_sign_changes += 1
+            for i in range(len(extended_y) - 1):
+                if (extended_y[i] >= self.gravity_base_y) != (extended_y[i+1] >= self.gravity_base_y):
+                    y_sign_changes += 1
+            
+            # Если знак меняется более 2 раз - это качание, не балансируем
+            if x_sign_changes >= 2 or y_sign_changes >= 2:
+                if self.consecutive_auto_steps > 0:
+                    rospy.logdebug(f"🔄 Auto-balance: Oscillating detected (x_changes={x_sign_changes}, y_changes={y_sign_changes}), resetting")
+                self.consecutive_auto_steps = 0
+                self.auto_balance_timeout_start = 0
+                self.last_balance_direction = None
+                return
         
         # Если изменение слишком мало - это не падение, а постоянное смещение или шум
         if abs(change_x) < change_threshold_x and abs(change_y) < change_threshold_y:
@@ -1034,7 +1306,9 @@ class JoystickController:
             return
         
         # Проверяем, прошло ли достаточно времени с последнего шага
-        if current_time - self.last_auto_step_time < self.auto_step_interval:
+        # Первый шаг делаем быстрее
+        step_interval = self.auto_step_interval_first if self.consecutive_auto_steps == 0 else self.auto_step_interval
+        if current_time - self.last_auto_step_time < step_interval:
             return
         
         # Если направление изменилось, сбрасываем счетчик (робот качается)
@@ -1049,6 +1323,23 @@ class JoystickController:
         self.last_auto_step_time = current_time
         self.consecutive_auto_steps += 1
         self.last_balance_direction = direction
+
+    def _calculate_dynamic_amplitude_orientation(self, deviation, base_amplitude, max_amplitude):
+        """
+        Вычисляет динамическую амплитуду шага на основе величины изменения ориентации (рад).
+        Чем больше отклонение, тем сильнее шаг.
+        """
+        if deviation <= self.orientation_threshold:
+            return base_amplitude
+        
+        # Линейная интерполяция от базовой до максимальной амплитуды
+        # От orientation_threshold до максимального изменения (примерно 0.1 рад = 5.7 градусов)
+        max_orientation_change = 0.1  # Максимальное изменение ориентации для максимального шага
+        if deviation >= max_orientation_change:
+            return max_amplitude
+        
+        ratio = (deviation - self.orientation_threshold) / (max_orientation_change - self.orientation_threshold)
+        return base_amplitude + (max_amplitude - base_amplitude) * ratio
 
     def _calculate_dynamic_amplitude(self, deviation, base_amplitude, max_amplitude):
         """
@@ -1224,11 +1515,11 @@ class JoystickController:
             
             rospy.loginfo(f"   Auto-balance: enabled={self.auto_balance_enabled}, consecutive_steps={self.consecutive_auto_steps}/{self.max_consecutive_auto_steps}")
             rospy.loginfo(f"   Balance timeout: {timeout_info}, last_direction: {self.last_balance_direction}")
-            rospy.loginfo(f"   Accel threshold: {self.accel_threshold:.3f} m/s², min: {self.accel_min_threshold:.3f} m/s²")
+            rospy.loginfo(f"   Orientation threshold: {self.orientation_threshold:.4f} rad ({math.degrees(self.orientation_threshold):.2f}°), min: {self.orientation_min_threshold:.4f} rad ({math.degrees(self.orientation_min_threshold):.2f}°)")
             fall_duration = rospy.get_time() - self.fall_start_time if self.fall_start_time else 0
             rospy.loginfo(f"   Auto-getup: enabled={self.auto_getup_enabled}, fall_duration={fall_duration:.1f}s (threshold: {self.fall_time_threshold}s)")
             rospy.loginfo(f"   Resonance: enabled={self.resonance_detection_enabled}, adaptation_factor={self.current_adaptation_factor:.2f}")
-            rospy.loginfo(f"   IMU History Size: {history_size}/{self.imu_history_size}, Accel History: X={len(self.accel_history['x'])}, Y={len(self.accel_history['y'])}")
+            rospy.loginfo(f"   IMU History Size: {history_size}/{self.imu_history_size}, Orientation History: Roll={len(self.orientation_history['roll'])}, Pitch={len(self.orientation_history['pitch'])}")
             rospy.loginfo("=" * 60)
         except Exception as e:
             rospy.logwarn(f"Error logging IMU status: {e}")
