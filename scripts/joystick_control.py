@@ -7,6 +7,7 @@ import threading
 import os
 import math
 import json
+import numpy as np
 # pygame импортируется внутри функции для обработки ошибок
 from ainex_sdk import Board
 from sensor_msgs.msg import Joy, Imu
@@ -14,6 +15,17 @@ from ainex_kinematics.gait_manager import GaitManager
 from ainex_kinematics.motion_manager import MotionManager
 from std_msgs.msg import String, Int32, Bool
 from std_srvs.srv import Trigger, TriggerResponse
+
+# Матрица преобразования осей (как в imu_visualizer.py)
+AXIS_TRANSFORM_MATRIX = np.array([
+    [-1.0, 0.0, 0.0],
+    [0.0, 0.0, -1.0],
+    [0.0, -1.0, 0.0],
+])
+
+def transform_axes_vector(vec):
+    """Преобразование вектора согласно матрице преобразования осей"""
+    return AXIS_TRANSFORM_MATRIX.dot(vec)
 
 # --- Constants and Mappings ---
 AXES_MAP = 'lx', 'ly', 'rx', 'ry', 'r2', 'l2', 'hat_x', 'hat_y'
@@ -148,11 +160,47 @@ class JoystickController:
         
         # Параметры для автоматических шагов в покое
         self.auto_balance_enabled = True
-        self.tilt_threshold_forward = 0.15  # Порог наклона вперед (рад)
-        self.tilt_threshold_backward = -0.15  # Порог наклона назад (рад)
-        self.auto_step_amplitude = 0.008  # Амплитуда автоматического шага
+        # Используем ЛИНЕЙНЫЕ УСКОРЕНИЯ для балансировки
+        # Y- = падение назад, Y+ = падение вперед
+        # X+ = вправо, X- = влево
+        
+        self.accel_threshold = 0.3  # Порог линейного ускорения (м/с²) для балансировки (снижен для быстрой реакции)
+        self.accel_min_threshold = 0.1  # Минимальный порог - игнорируем шум (снижен)
+        self.auto_step_amplitude_base = 0.005  # Базовая амплитуда автоматического шага
+        self.auto_step_amplitude_lateral_base = 0.004  # Базовая амплитуда для шагов влево/вправо
+        self.auto_step_amplitude_max = 0.015  # Максимальная амплитуда шага (при большом отклонении)
+        self.accel_max_for_max_step = 2.0  # Максимальное отклонение ускорения для максимального шага
         self.last_auto_step_time = 0
-        self.auto_step_interval = 0.5  # Минимальный интервал между автоматическими шагами (сек)
+        self.auto_step_interval = 0.6  # Интервал между шагами (сек) - даем время на реакцию
+        self.consecutive_auto_steps = 0  # Счетчик последовательных автоматических шагов
+        self.max_consecutive_auto_steps = 2  # Максимум последовательных шагов (чаще всего 1)
+        self.auto_balance_timeout = 3.0  # Таймаут после достижения максимума шагов (сек) - больше окно
+        self.auto_balance_timeout_start = 0  # Время начала таймаута
+        self.last_balance_direction = None  # Направление последнего шага балансировки ('forward', 'backward', 'left', 'right')
+        
+        # История линейных ускорений для анализа вектора и направления
+        self.accel_history = {
+            'x': [],  # Влево/вправо
+            'y': []   # Вперед/назад
+        }
+        self.accel_history_size = 15  # Увеличенное окно для анализа (больше данных)
+        
+        # Калибровка базового значения гравитации и уровня шумов при запуске
+        self.gravity_base_y = 9.8  # Начальное значение, будет обновляться при калибровке
+        self.gravity_calibration_samples = 30  # Количество образцов для калибровки при запуске
+        self.gravity_calibrated = False  # Флаг калибровки
+        self.calibration_data = {'x': [], 'y': []}  # Данные для калибровки
+        self.calibration_in_progress = True  # Флаг процесса калибровки
+        self.noise_level_x = 0.1  # Уровень шума по оси X (будет определен при калибровке)
+        self.noise_level_y = 0.1  # Уровень шума по оси Y (будет определен при калибровке)
+        self.last_stable_accel_y = None  # Последнее стабильное значение ay
+        
+        # Параметры для автоматического подъема при падении
+        self.auto_getup_enabled = True
+        self.fall_time_threshold = 3.0  # Время в секундах, после которого автоматически подниматься
+        self.fall_start_time = None  # Время начала падения
+        self.last_auto_getup_time = 0  # Время последнего автоматического подъема
+        self.auto_getup_interval = 5.0  # Минимальный интервал между попытками подъема (сек)
         
         # Параметры для отслеживания резонанса
         self.resonance_detection_enabled = True
@@ -163,9 +211,30 @@ class JoystickController:
         
         # Блокировка для thread-safe доступа к IMU данным
         self.imu_lock = threading.Lock()
+        
+        # Переменная для периодического логирования
+        self.last_log_time = 0
+        self.log_interval = 2.0  # Интервал логирования в секундах
+        self.imu_data_received = False  # Флаг первого получения IMU данных
 
         # --- NEW: Refactored speed parameters into a dictionary ---
         self.setup_speed_parameters()
+        
+        # Логирование инициализации
+        rospy.loginfo("=" * 60)
+        rospy.loginfo("🤖 IMU-based Gait Adaptation System Initialized")
+        rospy.loginfo(f"   Auto-balance: enabled={self.auto_balance_enabled}")
+        rospy.loginfo(f"   Auto-balance uses LINEAR ACCELERATION")
+        rospy.loginfo(f"   Acceleration mapping: Y- = backward, Y+ = forward, X+ = right, X- = left")
+        rospy.loginfo(f"   Accel threshold: {self.accel_threshold:.3f} m/s², min (noise): {self.accel_min_threshold:.3f} m/s²")
+        rospy.loginfo(f"   Auto-step interval: {self.auto_step_interval}s")
+        rospy.loginfo(f"   Auto-step amplitudes: base={self.auto_step_amplitude_base}, max={self.auto_step_amplitude_max}, lateral_base={self.auto_step_amplitude_lateral_base}")
+        rospy.loginfo(f"   Max consecutive steps: {self.max_consecutive_auto_steps}, timeout: {self.auto_balance_timeout}s")
+        rospy.loginfo(f"   History window: {self.accel_history_size} samples")
+        rospy.loginfo(f"   Auto-getup: enabled={self.auto_getup_enabled}, threshold={self.fall_time_threshold}s")
+        rospy.loginfo(f"   Resonance detection: enabled={self.resonance_detection_enabled}")
+        rospy.loginfo(f"   Resonance thresholds: safe={self.max_safe_amplitude}, critical={self.critical_amplitude}")
+        rospy.loginfo("=" * 60)
 
         # --- Initialization from primer.py ---
         self.sound = None
@@ -509,9 +578,33 @@ class JoystickController:
         """
         try:
             with self.imu_lock:
-                ay = msg.linear_acceleration.y
-                az = msg.linear_acceleration.z
-                ax = msg.linear_acceleration.x
+                # Получаем сырые данные
+                accel_raw = np.array([
+                    msg.linear_acceleration.x,
+                    msg.linear_acceleration.y,
+                    msg.linear_acceleration.z
+                ])
+                
+                # Сохраняем ИСХОДНЫЕ значения для логики падения (не трогаем логику падений)
+                ay_original = msg.linear_acceleration.y
+                az_original = msg.linear_acceleration.z
+                
+                # Применяем преобразование осей для калибровки и балансировки (как в imu_visualizer.py)
+                accel_transformed = transform_axes_vector(accel_raw)
+                ax = accel_transformed[0]
+                ay = accel_transformed[1]
+                az = accel_transformed[2]
+                
+                # Гироскоп тоже преобразуем
+                gyro_raw = np.array([
+                    msg.angular_velocity.x,
+                    msg.angular_velocity.y,
+                    msg.angular_velocity.z
+                ])
+                gyro_transformed = transform_axes_vector(gyro_raw)
+                gx = gyro_transformed[0]
+                gy = gyro_transformed[1]
+                gz = gyro_transformed[2]
 
                 # Извлечение углов ориентации из quaternion
                 qx = msg.orientation.x
@@ -549,30 +642,46 @@ class JoystickController:
                 for key in self.imu_history:
                     if len(self.imu_history[key]) > self.imu_history_size:
                         self.imu_history[key].pop(0)
+                
+                # Логирование первого получения IMU данных
+                if not self.imu_data_received:
+                    self.imu_data_received = True
+                    rospy.loginfo("✅ IMU data received! Starting calibration...")
+                    rospy.loginfo(f"   First IMU reading - Pitch: {math.degrees(pitch):.1f}°, Roll: {math.degrees(roll):.1f}°, Accel: X={ax:.2f}, Y={ay:.2f}, Z={az:.2f}")
+                    rospy.loginfo(f"   Collecting {self.gravity_calibration_samples} samples for calibration (robot should be stable)...")
+                
+                # КАЛИБРОВКА при запуске: собираем данные когда робот стабилен
+                if self.calibration_in_progress:
+                    self._perform_startup_calibration(ax, ay)
 
-            # Обработка падения (оригинальная логика)
+            # Обработка падения (оригинальная логика) - используем ИСХОДНЫЕ значения БЕЗ преобразования
             ACCEL_THRESH = 7.0
             ANGLE_THRESH = 30.0
             COUNT_INCREMENT = 1
             COUNT_DECREMENT = 1
 
-            if abs(az) > 1e-6:
-                angle_rad = math.atan2(abs(ay), abs(az))
+            if abs(az_original) > 1e-6:
+                angle_rad = math.atan2(abs(ay_original), abs(az_original))
                 angle_deg = math.degrees(angle_rad)
             else:
                 angle_deg = 90.0
 
+            # ЛОГИКА ПАДЕНИЯ: использует ИСХОДНЫЕ ay и az (НЕ изменена, БЕЗ преобразования осей)
+            # az > 7.0 = падение вперед (lie_to_stand)
+            # az < -7.0 = падение назад (recline_to_stand)
             if angle_deg < ANGLE_THRESH:
-                if az > ACCEL_THRESH:
+                if az_original > ACCEL_THRESH:
                     self.count_lie += COUNT_INCREMENT
                     self.count_recline = max(0, self.count_recline - COUNT_DECREMENT)
-                elif az < -ACCEL_THRESH:
+                elif az_original < -ACCEL_THRESH:
                     self.count_recline += COUNT_INCREMENT
                     self.count_lie = max(0, self.count_lie - COUNT_DECREMENT)
                 else:
+                    # az в нормальном диапазоне - уменьшаем счетчики
                     self.count_lie = max(0, self.count_lie - COUNT_DECREMENT)
                     self.count_recline = max(0, self.count_recline - COUNT_DECREMENT)
             else:
+                # Угол нормальный - уменьшаем счетчики
                 self.count_lie = max(0, self.count_lie - COUNT_DECREMENT)
                 self.count_recline = max(0, self.count_recline - COUNT_DECREMENT)
 
@@ -586,78 +695,428 @@ class JoystickController:
                 self.robot_state = 'stand'
 
             if old_state != self.robot_state:
-                rospy.loginfo(f"IMU detected robot state change: '{old_state}' -> '{self.robot_state}' (lie_count:{self.count_lie}, recline_count:{self.count_recline})")
+                rospy.loginfo(f"🔄 IMU detected robot state change: '{old_state}' -> '{self.robot_state}' (lie_count:{self.count_lie}, recline_count:{self.count_recline})")
+                # Отслеживаем время начала падения
+                if self.robot_state != 'stand' and old_state == 'stand':
+                    # Робот упал - устанавливаем время начала падения
+                    if self.fall_start_time is None:  # Устанавливаем только если еще не установлено
+                        self.fall_start_time = rospy.get_time()
+                        rospy.logwarn(f"⚠️ Robot fell! State: {self.robot_state}, starting fall timer...")
+                elif self.robot_state == 'stand' and old_state != 'stand':
+                    # Робот встал - сбрасываем данные о падении
+                    self.fall_start_time = None
+                    self.last_auto_getup_time = 0  # Сбрасываем таймер подъема
+                    self.count_lie = 0
+                    self.count_recline = 0
+                    self.consecutive_auto_steps = 0  # Сбрасываем счетчик шагов балансировки
+                    self.auto_balance_timeout_start = 0  # Сбрасываем таймаут
+                    self.last_balance_direction = None
+                    rospy.loginfo(f"✅ Robot recovered to stand position - all fall/balance data reset")
 
-            # Новая логика: автоматическая балансировка в покое
-            if self.auto_balance_enabled and self.robot_state == 'stand':
-                self._handle_auto_balance(pitch, roll)
+            # Новая логика: автоматический подъем при падении
+            if self.auto_getup_enabled and self.robot_state != 'stand':
+                self._handle_auto_getup()
+
+            # Новая логика: автоматическая балансировка в покое (использует линейные ускорения)
+            # Новая логика: автоматическая балансировка в покое (использует линейные ускорения)
+            # Работает только после завершения калибровки
+            if self.auto_balance_enabled and self.robot_state == 'stand' and self.gravity_calibrated:
+                self._handle_auto_balance_accel(ax, ay, pitch, roll)
 
             # Новая логика: обнаружение резонанса и адаптация параметров
             if self.resonance_detection_enabled and self.status == 'move':
                 self._handle_resonance_detection()
+            
+            # Логирование IMU данных для отладки (периодически)
+            current_time = rospy.get_time()
+            if current_time - self.last_log_time >= self.log_interval:
+                self._log_imu_status(pitch, roll, yaw, ax, ay, az, gx, gy, gz)
+                self.last_log_time = current_time
 
         except Exception as e:
             rospy.logwarn(f"Error processing IMU data in imu_callback: {e}")
 
-    def _handle_auto_balance(self, pitch, roll):
+    def _perform_startup_calibration(self, ax, ay):
         """
-        Обрабатывает автоматическую балансировку в состоянии покоя.
-        Делает шаг вперед/назад если робот заваливается.
+        Выполняет калибровку базового значения гравитации и уровня шумов при запуске ноды.
+        Робот должен быть неподвижен и стоять стабильно.
+        """
+        # Собираем данные для калибровки
+        self.calibration_data['x'].append(ax)
+        self.calibration_data['y'].append(ay)
+        
+        # Ограничиваем размер
+        if len(self.calibration_data['y']) > self.gravity_calibration_samples:
+            self.calibration_data['x'].pop(0)
+            self.calibration_data['y'].pop(0)
+        
+        # Когда собрали достаточно данных, выполняем калибровку
+        if len(self.calibration_data['y']) >= self.gravity_calibration_samples:
+            # Вычисляем средние значения
+            avg_x = sum(self.calibration_data['x']) / len(self.calibration_data['x'])
+            avg_y = sum(self.calibration_data['y']) / len(self.calibration_data['y'])
+            
+            # Вычисляем уровень шума (стандартное отклонение)
+            x_variance = sum((x - avg_x) ** 2 for x in self.calibration_data['x']) / len(self.calibration_data['x'])
+            y_variance = sum((y - avg_y) ** 2 for y in self.calibration_data['y']) / len(self.calibration_data['y'])
+            self.noise_level_x = math.sqrt(x_variance)
+            self.noise_level_y = math.sqrt(y_variance)
+            
+            # Устанавливаем базовое значение гравитации
+            self.gravity_base_y = avg_y
+            self.gravity_calibrated = True
+            self.calibration_in_progress = False
+            
+            # Обновляем минимальный порог на основе уровня шума
+            # Минимальный порог должен быть больше уровня шума
+            self.accel_min_threshold = max(0.1, self.noise_level_y * 1.5)
+            
+            rospy.loginfo("=" * 60)
+            rospy.loginfo("📐 CALIBRATION COMPLETE")
+            rospy.loginfo(f"   Gravity base (Y): {self.gravity_base_y:.3f} m/s²")
+            rospy.loginfo(f"   Noise levels: X={self.noise_level_x:.3f}, Y={self.noise_level_y:.3f} m/s²")
+            rospy.loginfo(f"   Adjusted min threshold: {self.accel_min_threshold:.3f} m/s²")
+            rospy.loginfo("   Auto-balance system is now ACTIVE")
+            rospy.loginfo("=" * 60)
+            
+            # Очищаем данные калибровки
+            self.calibration_data = {'x': [], 'y': []}
+
+    def _handle_auto_getup(self):
+        """
+        Автоматически вызывает подъем робота, если он упал и лежит дольше заданного времени.
         """
         if not self.can_move():
             return
         
         current_time = rospy.get_time()
         
-        # Проверяем, прошло ли достаточно времени с последнего автоматического шага
+        # Проверяем, что робот действительно упал
+        if self.robot_state == 'stand':
+            self.fall_start_time = None
+            return
+        
+        # Если время начала падения не установлено, устанавливаем его
+        if self.fall_start_time is None:
+            self.fall_start_time = current_time
+            return
+        
+        # Проверяем, прошло ли достаточно времени с последней попытки подъема
+        if current_time - self.last_auto_getup_time < self.auto_getup_interval:
+            return
+        
+        # Проверяем, лежит ли робот достаточно долго
+        fall_duration = current_time - self.fall_start_time
+        if fall_duration >= self.fall_time_threshold:
+            rospy.logwarn(f"🚨 Auto-getup: Robot has been down for {fall_duration:.1f} seconds (threshold: {self.fall_time_threshold}s)")
+            rospy.logwarn(f"   Attempting automatic get-up action: {self.robot_state}")
+            
+            try:
+                action_to_run = None
+                if self.robot_state == 'lie_to_stand':
+                    action_to_run = self.lie_to_stand_action_name
+                elif self.robot_state == 'recline_to_stand':
+                    action_to_run = self.recline_to_stand_action_name
+                
+                if action_to_run and self.motion_manager is not None:
+                    rospy.loginfo(f"🤖 Executing auto-getup action: {action_to_run}")
+                    self.motion_manager.run_action(action_to_run)
+                    self.last_auto_getup_time = current_time
+                    # НЕ сбрасываем fall_start_time сразу - ждем подтверждения что робот встал
+                    # Сброс произойдет в imu_callback когда robot_state станет 'stand'
+                    rospy.loginfo(f"✅ Auto-getup action '{action_to_run}' initiated")
+                else:
+                    rospy.logwarn(f"⚠️ Cannot execute auto-getup: action={action_to_run}, motion_manager={self.motion_manager is not None}")
+            except Exception as e:
+                rospy.logerr(f"❌ Error in auto-getup: {e}")
+                self.last_auto_getup_time = current_time  # Все равно обновляем время, чтобы не спамить
+
+    def _handle_auto_balance_accel(self, ax, ay, pitch, roll):
+        """
+        Обрабатывает автоматическую балансировку в состоянии покоя используя ЛИНЕЙНЫЕ УСКОРЕНИЯ.
+        Y- = падение назад, Y+ = падение вперед
+        X+ = вправо, X- = влево
+        КРИТИЧНО: Работает ТОЛЬКО когда робот в покое и НЕТ команд от джойстика.
+        НЕ работает если робот упал (robot_state != 'stand').
+        """
+        if not self.can_move():
+            return
+        
+        current_time = rospy.get_time()
+        
+        # КРИТИЧНО: балансировка НЕ работает если робот упал или начинает падать
+        # Проверяем не только robot_state, но и счетчики падения для раннего обнаружения
+        if (self.robot_state != 'stand' or 
+            self.count_lie > 10 or 
+            self.count_recline > 10):
+            if self.consecutive_auto_steps > 0:
+                rospy.logdebug(f"🛑 Auto-balance disabled: robot state={self.robot_state}, lie_count={self.count_lie}, recline_count={self.count_recline}")
+            self.consecutive_auto_steps = 0
+            self.auto_balance_timeout_start = 0
+            self.last_balance_direction = None
+            self.accel_history = {'x': [], 'y': []}  # Очищаем историю
+            return
+        
+        # СТРОГАЯ ПРОВЕРКА: балансировка НЕ должна работать при управлении джойстиком
+        if (self.status != 'stop' or 
+            self.update_param or 
+            abs(self.x_move_amplitude) > 0.001 or 
+            abs(self.y_move_amplitude) > 0.001 or 
+            abs(self.angle_move_amplitude) > 0.001):
+            # Есть команды от джойстика - полностью отключаем балансировку
+            if self.consecutive_auto_steps > 0:
+                rospy.logdebug(f"🛑 Auto-balance disabled: joystick control active")
+            self.consecutive_auto_steps = 0
+            self.auto_balance_timeout_start = 0
+            self.last_balance_direction = None
+            self.accel_history = {'x': [], 'y': []}  # Очищаем историю
+            return
+        
+        # Проверяем таймаут после достижения максимума шагов
+        if self.consecutive_auto_steps >= self.max_consecutive_auto_steps:
+            if self.auto_balance_timeout_start == 0:
+                self.auto_balance_timeout_start = current_time
+                rospy.logwarn(f"⏸️ Auto-balance: Reached max steps ({self.consecutive_auto_steps}), starting timeout ({self.auto_balance_timeout}s)")
+            
+            # Если таймаут еще не истек, ждем
+            if current_time - self.auto_balance_timeout_start < self.auto_balance_timeout:
+                return
+            
+            # Таймаут истек - проверяем результат
+            if self.robot_state != 'stand':
+                rospy.logwarn(f"⚠️ Auto-balance timeout: Robot fell after {self.consecutive_auto_steps} steps")
+                self.consecutive_auto_steps = 0
+                self.auto_balance_timeout_start = 0
+                self.last_balance_direction = None
+                self.accel_history = {'x': [], 'y': []}
+                return
+            else:
+                rospy.loginfo(f"✅ Auto-balance timeout: Robot stable after {self.consecutive_auto_steps} steps, resetting")
+                self.consecutive_auto_steps = 0
+                self.auto_balance_timeout_start = 0
+                self.last_balance_direction = None
+                self.accel_history = {'x': [], 'y': []}
+        
+        # Добавляем текущие ускорения в историю
+        self.accel_history['x'].append(ax)
+        self.accel_history['y'].append(ay)
+        
+        # Ограничиваем размер истории
+        for key in self.accel_history:
+            if len(self.accel_history[key]) > self.accel_history_size:
+                self.accel_history[key].pop(0)
+        
+        # Нужно достаточно данных для анализа вектора
+        if len(self.accel_history['x']) < 5:
+            return
+        
+        # Анализируем вектор ускорения - смотрим на последние значения
+        # Берем среднее из последних значений для определения направления
+        recent_x = self.accel_history['x'][-5:]
+        recent_y = self.accel_history['y'][-5:]
+        
+        avg_x = sum(recent_x) / len(recent_x)
+        avg_y_raw = sum(recent_y) / len(recent_y)
+        
+        # Используем калиброванное базовое значение гравитации (определено при запуске)
+        avg_y = avg_y_raw - self.gravity_base_y  # Отклонение от калиброванного базового значения
+        
+        # КРИТИЧНО: проверяем ИЗМЕНЕНИЕ отклонения, а не абсолютное значение
+        # Если отклонение постоянно в одном направлении без изменений - это не падение
+        # Используем уровень шума, определенный при калибровке
+        if len(self.accel_history['y']) >= 10:
+            # Вычисляем изменение отклонения (производную)
+            recent_y_deviations = [y - self.gravity_base_y for y in recent_y]
+            if len(recent_y_deviations) >= 3:
+                # Изменение отклонения (разница между последними значениями)
+                deviation_change = abs(recent_y_deviations[-1] - recent_y_deviations[-3])
+                # Порог изменения основан на уровне шума (минимум 0.15)
+                change_threshold = max(0.15, self.noise_level_y * 2.0)
+                # Если отклонение не меняется (стабильно в пределах шума), не балансируем
+                if deviation_change < change_threshold:
+                    if self.consecutive_auto_steps > 0:
+                        rospy.logdebug(f"✅ Auto-balance: Deviation stable (change={deviation_change:.3f} < {change_threshold:.3f}), resetting")
+                    self.consecutive_auto_steps = 0
+                    self.auto_balance_timeout_start = 0
+                    self.last_balance_direction = None
+                    return
+        
+        # КРИТИЧНО: проверяем ИЗМЕНЕНИЕ ускорения, а не абсолютное значение
+        # Вычисляем изменение ускорения (производную) - разницу между последними значениями
+        # Это позволяет ловить толчки/качания, а не реагировать на постоянные смещения
+        
+        if len(self.accel_history['x']) < 8 or len(self.accel_history['y']) < 8:
+            return  # Нужно больше данных для анализа изменений
+        
+        # Берем более длинную историю для анализа изменений
+        extended_x = self.accel_history['x'][-8:]
+        extended_y = self.accel_history['y'][-8:]
+        
+        # Вычисляем изменение ускорения (разница между последними и предыдущими значениями)
+        # Используем разницу между средними из последних 3 и предыдущих 3 значений
+        recent_3_x = extended_x[-3:]
+        recent_3_y = extended_y[-3:]
+        prev_3_x = extended_x[-6:-3] if len(extended_x) >= 6 else extended_x[:3]
+        prev_3_y = extended_y[-6:-3] if len(extended_y) >= 6 else extended_y[:3]
+        
+        avg_recent_x = sum(recent_3_x) / len(recent_3_x)
+        avg_recent_y = sum(recent_3_y) / len(recent_3_y)
+        avg_prev_x = sum(prev_3_x) / len(prev_3_x) if prev_3_x else avg_recent_x
+        avg_prev_y = sum(prev_3_y) / len(prev_3_y) if prev_3_y else avg_recent_y
+        
+        # Изменение ускорения (производная)
+        change_x = avg_recent_x - avg_prev_x
+        change_y = (avg_recent_y - self.gravity_base_y) - (avg_prev_y - self.gravity_base_y)
+        
+        # Находим максимальное изменение для определения силы шага
+        max_change_x = max(abs(x - extended_x[0]) for x in extended_x) if extended_x else 0.0
+        max_change_y = max(abs((y - self.gravity_base_y) - (extended_y[0] - self.gravity_base_y)) for y in extended_y) if extended_y else 0.0
+        
+        # Проверяем, что изменение значительное (не шум)
+        # Используем порог, основанный на уровне шума
+        change_threshold_x = max(self.accel_threshold, self.noise_level_x * 3.0)
+        change_threshold_y = max(self.accel_threshold, self.noise_level_y * 3.0)
+        
+        # Если изменение слишком мало - это не падение, а постоянное смещение или шум
+        if abs(change_x) < change_threshold_x and abs(change_y) < change_threshold_y:
+            if self.consecutive_auto_steps > 0:
+                rospy.logdebug(f"✅ Auto-balance: No significant change (dx={change_x:.3f}, dy={change_y:.3f}), resetting")
+            self.consecutive_auto_steps = 0
+            self.auto_balance_timeout_start = 0
+            self.last_balance_direction = None
+            return
+        
+        # Определяем направление по ИЗМЕНЕНИЮ ускорения (не по абсолютному значению)
+        # change_y < 0 = ускорение уменьшается (падает назад) → нужен шаг назад
+        # change_y > 0 = ускорение увеличивается (падает вперед) → нужен шаг вперед
+        # change_x > 0 = ускорение вправо увеличивается → нужен шаг вправо
+        # change_x < 0 = ускорение влево увеличивается → нужен шаг влево
+        
+        direction = None
+        step_x = 0
+        step_y = 0
+        deviation_magnitude = 0.0  # Величина изменения для расчета амплитуды
+        
+        # Приоритет: сначала вперед/назад, потом влево/вправо
+        if abs(change_y) > abs(change_x):
+            # Доминирует изменение вперед/назад
+            if change_y < -change_threshold_y:
+                direction = 'backward'
+                deviation_magnitude = abs(change_y)
+                step_amplitude = self._calculate_dynamic_amplitude(deviation_magnitude, self.auto_step_amplitude_base, self.auto_step_amplitude_max)
+                step_x = -step_amplitude  # x_move_amplitude: отрицательное = назад
+            elif change_y > change_threshold_y:
+                direction = 'forward'
+                deviation_magnitude = abs(change_y)
+                step_amplitude = self._calculate_dynamic_amplitude(deviation_magnitude, self.auto_step_amplitude_base, self.auto_step_amplitude_max)
+                step_x = step_amplitude  # x_move_amplitude: положительное = вперед
+        else:
+            # Доминирует изменение влево/вправо
+            if change_x > change_threshold_x:
+                direction = 'right'
+                deviation_magnitude = abs(change_x)
+                step_amplitude = self._calculate_dynamic_amplitude(deviation_magnitude, self.auto_step_amplitude_lateral_base, self.auto_step_amplitude_max)
+                step_y = step_amplitude  # y_move_amplitude: положительное = вправо
+            elif change_x < -change_threshold_x:
+                direction = 'left'
+                deviation_magnitude = abs(change_x)
+                step_amplitude = self._calculate_dynamic_amplitude(deviation_magnitude, self.auto_step_amplitude_lateral_base, self.auto_step_amplitude_max)
+                step_y = -step_amplitude  # y_move_amplitude: отрицательное = влево
+        
+        # Если ускорение слишком мало - сбрасываем счетчик
+        if direction is None:
+            if self.consecutive_auto_steps > 0:
+                rospy.logdebug(f"✅ Auto-balance: Stable (ax={avg_x:.3f}, ay_dev={avg_y:.3f}, base={self.gravity_base_y:.3f}), resetting")
+            self.consecutive_auto_steps = 0
+            self.auto_balance_timeout_start = 0
+            self.last_balance_direction = None
+            self.last_stable_accel_y = avg_y_raw  # Сохраняем стабильное значение
+            return
+        
+        # Проверяем, прошло ли достаточно времени с последнего шага
         if current_time - self.last_auto_step_time < self.auto_step_interval:
             return
         
-        # Проверяем, что робот действительно в покое (нет команд от джойстика)
-        if self.status != 'stop' or self.update_param:
-            return
+        # Если направление изменилось, сбрасываем счетчик (робот качается)
+        if self.last_balance_direction is not None and self.last_balance_direction != direction:
+            rospy.loginfo(f"🔄 Auto-balance: Direction changed from {self.last_balance_direction} to {direction}, resetting counter")
+            self.consecutive_auto_steps = 0
+            self.auto_balance_timeout_start = 0
         
-        # Pitch - наклон вперед/назад (положительный = вперед, отрицательный = назад)
-        # Если робот заваливается назад (pitch < threshold), делаем шаг назад
-        if pitch < self.tilt_threshold_backward:
-            rospy.logdebug(f"Auto-balance: Robot tilting backward (pitch={pitch:.3f}), making backward step")
-            self._make_auto_step(backward=True)
-            self.last_auto_step_time = current_time
-        # Если робот заваливается вперед (pitch > threshold), делаем шаг вперед
-        elif pitch > self.tilt_threshold_forward:
-            rospy.logdebug(f"Auto-balance: Robot tilting forward (pitch={pitch:.3f}), making forward step")
-            self._make_auto_step(backward=False)
-            self.last_auto_step_time = current_time
+        # Выполняем шаг
+        rospy.loginfo(f"🤖 Auto-balance: Robot tilting {direction} (change_x={change_x:.3f}, change_y={change_y:.3f}, magnitude={deviation_magnitude:.3f} m/s²), making step (consecutive: {self.consecutive_auto_steps + 1}/{self.max_consecutive_auto_steps})")
+        self._make_auto_step_2d(step_x, step_y, fast=(self.consecutive_auto_steps > 0))
+        self.last_auto_step_time = current_time
+        self.consecutive_auto_steps += 1
+        self.last_balance_direction = direction
 
-    def _make_auto_step(self, backward=False):
+    def _calculate_dynamic_amplitude(self, deviation, base_amplitude, max_amplitude):
         """
-        Выполняет автоматический шаг для балансировки.
+        Вычисляет динамическую амплитуду шага на основе величины отклонения ускорения.
+        Чем больше отклонение, тем сильнее шаг.
+        """
+        if deviation <= self.accel_threshold:
+            return base_amplitude
+        
+        # Линейная интерполяция от базовой до максимальной амплитуды
+        # От accel_threshold до accel_max_for_max_step
+        if deviation >= self.accel_max_for_max_step:
+            return max_amplitude
+        
+        ratio = (deviation - self.accel_threshold) / (self.accel_max_for_max_step - self.accel_threshold)
+        return base_amplitude + (max_amplitude - base_amplitude) * ratio
+
+    def _make_auto_step(self, backward=False, fast=False):
+        """
+        Выполняет автоматический шаг для балансировки (legacy, для совместимости).
+        """
+        step_x = -self.auto_step_amplitude_base if backward else self.auto_step_amplitude_base
+        self._make_auto_step_2d(step_x, 0, fast)
+
+    def _make_auto_step_2d(self, step_x, step_y, fast=False):
+        """
+        Выполняет автоматический шаг для балансировки в двух направлениях.
+        step_x: шаг вперед/назад (положительный = вперед)
+        step_y: шаг влево/вправо (положительный = вправо)
+        fast=True делает шаг быстрее (уменьшает период времени).
         """
         try:
             gait_param = self.gait_manager.get_gait_param()
             params = self.speed_params[self.speed_mode]
             period_time = list(params['period_time'])
             
+            # Ускоряем шаг для дополнительных шагов
+            if fast:
+                # Уменьшаем период времени на 30% для быстрых шагов
+                period_time[0] = int(period_time[0] * 0.7)
+                rospy.logdebug(f"   Fast step: period_time reduced to {period_time[0]}ms")
+            
             if self.speed_mode > 1:
                 gait_param.update(params['gait_base'])
-            
-            # Определяем направление шага
-            step_amplitude = -self.auto_step_amplitude if backward else self.auto_step_amplitude
             
             # Выполняем один шаг
             gait_param['init_z_offset'] = self.init_z_offset
             self.gait_manager.set_step(
                 period_time, 
-                step_amplitude,  # x_move_amplitude (вперед/назад)
-                0,  # y_move_amplitude
+                step_x,  # x_move_amplitude (вперед/назад)
+                step_y,  # y_move_amplitude (влево/вправо)
                 0,  # angle_move_amplitude
                 gait_param, 
                 step_num=1  # Один шаг
             )
             
-            rospy.loginfo(f"Auto-balance step executed: {'backward' if backward else 'forward'}")
+            step_type = "fast" if fast else "normal"
+            direction_str = ""
+            if abs(step_x) > 0.001:
+                direction_str += f"{'forward' if step_x > 0 else 'backward'}"
+            if abs(step_y) > 0.001:
+                if direction_str:
+                    direction_str += "+"
+                direction_str += f"{'right' if step_y > 0 else 'left'}"
+            
+            rospy.loginfo(f"✅ Auto-balance step executed: {direction_str} ({step_type}, x={step_x:.4f}, y={step_y:.4f}, period: {period_time[0]}ms)")
         except Exception as e:
-            rospy.logwarn(f"Error making auto-balance step: {e}")
+            rospy.logwarn(f"❌ Error making auto-balance step: {e}")
 
     def _handle_resonance_detection(self):
         """
@@ -696,26 +1155,83 @@ class JoystickController:
             if combined_amplitude > self.critical_amplitude:
                 # Критическая ситуация - резко уменьшаем шаг
                 self.current_adaptation_factor = 0.5
-                rospy.logwarn(f"CRITICAL resonance detected (amplitude={combined_amplitude:.3f}), reducing step by 50%")
+                rospy.logwarn(f"⚠️ CRITICAL resonance detected! (amplitude={combined_amplitude:.3f} m/s²), reducing step by 50% (factor: {self.current_adaptation_factor:.2f})")
+                rospy.loginfo(f"   Amplitudes - X: {amplitude_x:.3f}, Y: {amplitude_y:.3f}, Z: {amplitude_z:.3f}, Pitch: {amplitude_pitch:.3f} rad")
             elif combined_amplitude > self.max_safe_amplitude:
                 # Высокая амплитуда - постепенно уменьшаем шаг
                 # Линейная интерполяция от max_safe_amplitude до critical_amplitude
                 ratio = (combined_amplitude - self.max_safe_amplitude) / (self.critical_amplitude - self.max_safe_amplitude)
                 self.current_adaptation_factor = 1.0 - ratio * 0.4  # От 1.0 до 0.6
-                rospy.loginfo(f"High amplitude detected (amplitude={combined_amplitude:.3f}), adaptation factor: {self.current_adaptation_factor:.2f}")
+                rospy.loginfo(f"📊 High amplitude detected (amplitude={combined_amplitude:.3f} m/s²), adaptation factor: {self.current_adaptation_factor:.2f}")
+                rospy.loginfo(f"   Amplitudes - X: {amplitude_x:.3f}, Y: {amplitude_y:.3f}, Z: {amplitude_z:.3f}, Pitch: {amplitude_pitch:.3f} rad")
             else:
                 # Нормальная амплитуда - постепенно возвращаем к нормальным параметрам
                 if self.current_adaptation_factor < 1.0:
                     self.current_adaptation_factor = min(1.0, self.current_adaptation_factor + 0.05)
                     if self.current_adaptation_factor != old_factor:
-                        rospy.logdebug(f"Recovering from resonance (amplitude={combined_amplitude:.3f}), adaptation factor: {self.current_adaptation_factor:.2f}")
+                        rospy.loginfo(f"✅ Recovering from resonance (amplitude={combined_amplitude:.3f} m/s²), adaptation factor: {self.current_adaptation_factor:.2f}")
             
             # Применяем адаптацию к параметрам gait_manager
             if abs(self.current_adaptation_factor - 1.0) > 0.01:  # Только если есть значительное изменение
                 self._apply_gait_adaptation()
                 
         except Exception as e:
-            rospy.logwarn(f"Error in resonance detection: {e}")
+            rospy.logwarn(f"❌ Error in resonance detection: {e}")
+
+    def _log_imu_status(self, pitch, roll, yaw, ax, ay, az, gx, gy, gz):
+        """
+        Логирует текущее состояние IMU для отладки.
+        """
+        try:
+            with self.imu_lock:
+                history_size = len(self.imu_history['pitch'])
+            
+            # Вычисляем сглаженные значения
+            with self.imu_lock:
+                if history_size >= 5:
+                    recent_pitch = self.imu_history['pitch'][-5:]
+                    smoothed_pitch = sum(recent_pitch) / len(recent_pitch)
+                else:
+                    smoothed_pitch = pitch
+            
+            rospy.loginfo("=" * 60)
+            rospy.loginfo("📡 IMU Status Report")
+            rospy.loginfo(f"   Orientation:")
+            rospy.loginfo(f"      Pitch: {pitch:.3f} rad ({math.degrees(pitch):.1f}°)")
+            rospy.loginfo(f"      Roll:  {roll:.3f} rad ({math.degrees(roll):.1f}°)")
+            rospy.loginfo(f"      Yaw:   {yaw:.3f} rad ({math.degrees(yaw):.1f}°)")
+            rospy.loginfo(f"   Acceleration: X={ax:.2f}, Y={ay:.2f}, Z={az:.2f} m/s²")
+            rospy.loginfo(f"   Angular Velocity (Gyro): X={gx:.4f}, Y={gy:.4f}, Z={gz:.4f} rad/s")
+            rospy.loginfo(f"   Smoothed Pitch: {smoothed_pitch:.3f} rad ({math.degrees(smoothed_pitch):.1f}°)")
+            
+            # Средние ускорения из истории
+            avg_x = sum(self.accel_history['x']) / len(self.accel_history['x']) if len(self.accel_history['x']) > 0 else 0.0
+            avg_y_raw = sum(self.accel_history['y']) / len(self.accel_history['y']) if len(self.accel_history['y']) > 0 else 0.0
+            avg_y_deviation = avg_y_raw - 9.8  # Отклонение от гравитации
+            
+            rospy.loginfo(f"   Average Acceleration: X={avg_x:.3f} (left/right), Y_raw={avg_y_raw:.3f}, Y_deviation={avg_y_deviation:.3f} (forward/back) m/s²")
+            rospy.loginfo(f"   Gravity base (calibrated): {self.gravity_base_y:.3f} m/s², calibrated={self.gravity_calibrated}")
+            rospy.loginfo(f"   Noise levels: X={self.noise_level_x:.3f}, Y={self.noise_level_y:.3f} m/s²")
+            rospy.loginfo(f"   Calibration status: {'COMPLETE' if self.gravity_calibrated else 'IN PROGRESS'}")
+            rospy.loginfo(f"   Robot State: {self.robot_state}, Movement Status: {self.status}")
+            rospy.loginfo(f"   Update Param: {self.update_param}, Move Amplitudes: X={self.x_move_amplitude:.4f}, Y={self.y_move_amplitude:.4f}")
+            
+            # Информация о таймауте балансировки
+            timeout_info = "none"
+            if self.auto_balance_timeout_start > 0:
+                timeout_remaining = self.auto_balance_timeout - (rospy.get_time() - self.auto_balance_timeout_start)
+                timeout_info = f"{timeout_remaining:.1f}s remaining"
+            
+            rospy.loginfo(f"   Auto-balance: enabled={self.auto_balance_enabled}, consecutive_steps={self.consecutive_auto_steps}/{self.max_consecutive_auto_steps}")
+            rospy.loginfo(f"   Balance timeout: {timeout_info}, last_direction: {self.last_balance_direction}")
+            rospy.loginfo(f"   Accel threshold: {self.accel_threshold:.3f} m/s², min: {self.accel_min_threshold:.3f} m/s²")
+            fall_duration = rospy.get_time() - self.fall_start_time if self.fall_start_time else 0
+            rospy.loginfo(f"   Auto-getup: enabled={self.auto_getup_enabled}, fall_duration={fall_duration:.1f}s (threshold: {self.fall_time_threshold}s)")
+            rospy.loginfo(f"   Resonance: enabled={self.resonance_detection_enabled}, adaptation_factor={self.current_adaptation_factor:.2f}")
+            rospy.loginfo(f"   IMU History Size: {history_size}/{self.imu_history_size}, Accel History: X={len(self.accel_history['x'])}, Y={len(self.accel_history['y'])}")
+            rospy.loginfo("=" * 60)
+        except Exception as e:
+            rospy.logwarn(f"Error logging IMU status: {e}")
 
     def _apply_gait_adaptation(self):
         """
