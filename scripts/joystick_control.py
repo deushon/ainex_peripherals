@@ -134,6 +134,36 @@ class JoystickController:
         self.count_recline = 0
         self.FALL_COUNT_THRESHOLD = 50
 
+        # --- IMU-based gait adaptation variables ---
+        # История IMU данных для расчета амплитуды
+        self.imu_history_size = 50  # Количество последних измерений для анализа
+        self.imu_history = {
+            'ax': [],  # linear_acceleration.x
+            'ay': [],  # linear_acceleration.y
+            'az': [],  # linear_acceleration.z
+            'roll': [],  # orientation roll (из quaternion)
+            'pitch': [],  # orientation pitch
+            'yaw': []   # orientation yaw
+        }
+        
+        # Параметры для автоматических шагов в покое
+        self.auto_balance_enabled = True
+        self.tilt_threshold_forward = 0.15  # Порог наклона вперед (рад)
+        self.tilt_threshold_backward = -0.15  # Порог наклона назад (рад)
+        self.auto_step_amplitude = 0.008  # Амплитуда автоматического шага
+        self.last_auto_step_time = 0
+        self.auto_step_interval = 0.5  # Минимальный интервал между автоматическими шагами (сек)
+        
+        # Параметры для отслеживания резонанса
+        self.resonance_detection_enabled = True
+        self.max_safe_amplitude = 0.3  # Максимальная безопасная амплитуда качания (м/с²)
+        self.critical_amplitude = 0.5  # Критическая амплитуда, требующая немедленного уменьшения шага
+        self.base_gait_params = None  # Базовые параметры походки для восстановления
+        self.current_adaptation_factor = 1.0  # Фактор адаптации (1.0 = без изменений, <1.0 = уменьшение)
+        
+        # Блокировка для thread-safe доступа к IMU данным
+        self.imu_lock = threading.Lock()
+
         # --- NEW: Refactored speed parameters into a dictionary ---
         self.setup_speed_parameters()
 
@@ -473,13 +503,54 @@ class JoystickController:
     # NEW: IMU Callback from joystick_control 1.py
     def imu_callback(self, msg: Imu):
         """
-        Processes IMU data to determine fall state.
+        Processes IMU data to determine fall state and adapt gait parameters.
         Logic adapted from mobile app example, using ay and az.
+        Now also handles automatic balancing and resonance detection.
         """
         try:
-            ay = msg.linear_acceleration.y
-            az = msg.linear_acceleration.z
+            with self.imu_lock:
+                ay = msg.linear_acceleration.y
+                az = msg.linear_acceleration.z
+                ax = msg.linear_acceleration.x
 
+                # Извлечение углов ориентации из quaternion
+                qx = msg.orientation.x
+                qy = msg.orientation.y
+                qz = msg.orientation.z
+                qw = msg.orientation.w
+                
+                # Преобразование quaternion в углы Эйлера (roll, pitch, yaw)
+                # Roll (вращение вокруг оси X)
+                sinr_cosp = 2 * (qw * qx + qy * qz)
+                cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+                roll = math.atan2(sinr_cosp, cosr_cosp)
+                
+                # Pitch (вращение вокруг оси Y)
+                sinp = 2 * (qw * qy - qz * qx)
+                if abs(sinp) >= 1:
+                    pitch = math.copysign(math.pi / 2, sinp)
+                else:
+                    pitch = math.asin(sinp)
+                
+                # Yaw (вращение вокруг оси Z)
+                siny_cosp = 2 * (qw * qz + qx * qy)
+                cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
+                yaw = math.atan2(siny_cosp, cosy_cosp)
+
+                # Обновление истории IMU данных
+                self.imu_history['ax'].append(ax)
+                self.imu_history['ay'].append(ay)
+                self.imu_history['az'].append(az)
+                self.imu_history['roll'].append(roll)
+                self.imu_history['pitch'].append(pitch)
+                self.imu_history['yaw'].append(yaw)
+                
+                # Ограничение размера истории
+                for key in self.imu_history:
+                    if len(self.imu_history[key]) > self.imu_history_size:
+                        self.imu_history[key].pop(0)
+
+            # Обработка падения (оригинальная логика)
             ACCEL_THRESH = 7.0
             ANGLE_THRESH = 30.0
             COUNT_INCREMENT = 1
@@ -517,8 +588,174 @@ class JoystickController:
             if old_state != self.robot_state:
                 rospy.loginfo(f"IMU detected robot state change: '{old_state}' -> '{self.robot_state}' (lie_count:{self.count_lie}, recline_count:{self.count_recline})")
 
+            # Новая логика: автоматическая балансировка в покое
+            if self.auto_balance_enabled and self.robot_state == 'stand':
+                self._handle_auto_balance(pitch, roll)
+
+            # Новая логика: обнаружение резонанса и адаптация параметров
+            if self.resonance_detection_enabled and self.status == 'move':
+                self._handle_resonance_detection()
+
         except Exception as e:
             rospy.logwarn(f"Error processing IMU data in imu_callback: {e}")
+
+    def _handle_auto_balance(self, pitch, roll):
+        """
+        Обрабатывает автоматическую балансировку в состоянии покоя.
+        Делает шаг вперед/назад если робот заваливается.
+        """
+        if not self.can_move():
+            return
+        
+        current_time = rospy.get_time()
+        
+        # Проверяем, прошло ли достаточно времени с последнего автоматического шага
+        if current_time - self.last_auto_step_time < self.auto_step_interval:
+            return
+        
+        # Проверяем, что робот действительно в покое (нет команд от джойстика)
+        if self.status != 'stop' or self.update_param:
+            return
+        
+        # Pitch - наклон вперед/назад (положительный = вперед, отрицательный = назад)
+        # Если робот заваливается назад (pitch < threshold), делаем шаг назад
+        if pitch < self.tilt_threshold_backward:
+            rospy.logdebug(f"Auto-balance: Robot tilting backward (pitch={pitch:.3f}), making backward step")
+            self._make_auto_step(backward=True)
+            self.last_auto_step_time = current_time
+        # Если робот заваливается вперед (pitch > threshold), делаем шаг вперед
+        elif pitch > self.tilt_threshold_forward:
+            rospy.logdebug(f"Auto-balance: Robot tilting forward (pitch={pitch:.3f}), making forward step")
+            self._make_auto_step(backward=False)
+            self.last_auto_step_time = current_time
+
+    def _make_auto_step(self, backward=False):
+        """
+        Выполняет автоматический шаг для балансировки.
+        """
+        try:
+            gait_param = self.gait_manager.get_gait_param()
+            params = self.speed_params[self.speed_mode]
+            period_time = list(params['period_time'])
+            
+            if self.speed_mode > 1:
+                gait_param.update(params['gait_base'])
+            
+            # Определяем направление шага
+            step_amplitude = -self.auto_step_amplitude if backward else self.auto_step_amplitude
+            
+            # Выполняем один шаг
+            gait_param['init_z_offset'] = self.init_z_offset
+            self.gait_manager.set_step(
+                period_time, 
+                step_amplitude,  # x_move_amplitude (вперед/назад)
+                0,  # y_move_amplitude
+                0,  # angle_move_amplitude
+                gait_param, 
+                step_num=1  # Один шаг
+            )
+            
+            rospy.loginfo(f"Auto-balance step executed: {'backward' if backward else 'forward'}")
+        except Exception as e:
+            rospy.logwarn(f"Error making auto-balance step: {e}")
+
+    def _handle_resonance_detection(self):
+        """
+        Обнаруживает резонанс на основе амплитуды качания и адаптирует параметры gait_manager.
+        """
+        try:
+            with self.imu_lock:
+                if len(self.imu_history['ax']) < 10:  # Нужно минимум данных для анализа
+                    return
+                
+                # Расчет амплитуды качания по каждой оси
+                # Используем стандартное отклонение как меру амплитуды
+                def calculate_amplitude(data_list):
+                    if len(data_list) < 2:
+                        return 0.0
+                    mean = sum(data_list) / len(data_list)
+                    variance = sum((x - mean) ** 2 for x in data_list) / len(data_list)
+                    return math.sqrt(variance)
+                
+                amplitude_x = calculate_amplitude(self.imu_history['ax'])
+                amplitude_y = calculate_amplitude(self.imu_history['ay'])
+                amplitude_z = calculate_amplitude(self.imu_history['az'])
+                
+                # Используем максимальную амплитуду из всех осей
+                max_amplitude = max(amplitude_x, amplitude_y, amplitude_z)
+                
+                # Также учитываем амплитуду по pitch (наклон вперед/назад)
+                amplitude_pitch = calculate_amplitude(self.imu_history['pitch'])
+                
+                # Комбинированная метрика амплитуды
+                combined_amplitude = max(max_amplitude, abs(amplitude_pitch) * 2.0)
+            
+            # Адаптация параметров на основе амплитуды
+            old_factor = self.current_adaptation_factor
+            
+            if combined_amplitude > self.critical_amplitude:
+                # Критическая ситуация - резко уменьшаем шаг
+                self.current_adaptation_factor = 0.5
+                rospy.logwarn(f"CRITICAL resonance detected (amplitude={combined_amplitude:.3f}), reducing step by 50%")
+            elif combined_amplitude > self.max_safe_amplitude:
+                # Высокая амплитуда - постепенно уменьшаем шаг
+                # Линейная интерполяция от max_safe_amplitude до critical_amplitude
+                ratio = (combined_amplitude - self.max_safe_amplitude) / (self.critical_amplitude - self.max_safe_amplitude)
+                self.current_adaptation_factor = 1.0 - ratio * 0.4  # От 1.0 до 0.6
+                rospy.loginfo(f"High amplitude detected (amplitude={combined_amplitude:.3f}), adaptation factor: {self.current_adaptation_factor:.2f}")
+            else:
+                # Нормальная амплитуда - постепенно возвращаем к нормальным параметрам
+                if self.current_adaptation_factor < 1.0:
+                    self.current_adaptation_factor = min(1.0, self.current_adaptation_factor + 0.05)
+                    if self.current_adaptation_factor != old_factor:
+                        rospy.logdebug(f"Recovering from resonance (amplitude={combined_amplitude:.3f}), adaptation factor: {self.current_adaptation_factor:.2f}")
+            
+            # Применяем адаптацию к параметрам gait_manager
+            if abs(self.current_adaptation_factor - 1.0) > 0.01:  # Только если есть значительное изменение
+                self._apply_gait_adaptation()
+                
+        except Exception as e:
+            rospy.logwarn(f"Error in resonance detection: {e}")
+
+    def _apply_gait_adaptation(self):
+        """
+        Применяет адаптацию параметров gait_manager на основе current_adaptation_factor.
+        Вызывается из _handle_resonance_detection для динамической адаптации во время движения.
+        """
+        try:
+            if not self.update_param or self.status != 'move':  # Только если робот движется
+                return
+            
+            gait_param = self.gait_manager.get_gait_param()
+            params = self.speed_params[self.speed_mode]
+            period_time = list(params['period_time'])
+            
+            if self.speed_mode > 1:
+                gait_param.update(params['gait_base'])
+            
+            # Применяем адаптацию к амплитудам движения
+            adapted_x_amp = self.x_move_amplitude * self.current_adaptation_factor
+            adapted_y_amp = self.y_move_amplitude * self.current_adaptation_factor
+            adapted_angle_amp = self.angle_move_amplitude * self.current_adaptation_factor
+            
+            # Также адаптируем период времени (увеличить для большей стабильности)
+            if self.current_adaptation_factor < 0.8:
+                # Увеличиваем период времени шага для большей стабильности
+                period_time[0] = int(period_time[0] * (1.0 + (1.0 - self.current_adaptation_factor) * 0.3))
+            
+            # Применяем адаптированные параметры
+            gait_param['init_z_offset'] = self.init_z_offset
+            self.gait_manager.set_step(
+                period_time,
+                adapted_x_amp,
+                adapted_y_amp,
+                adapted_angle_amp,
+                gait_param,
+                step_num=0
+            )
+            
+        except Exception as e:
+            rospy.logwarn(f"Error applying gait adaptation: {e}")
 
     def axes_callback(self, axes):
         """Calculates and sets walking parameters based on speed mode and joystick input."""
@@ -561,12 +798,36 @@ class JoystickController:
 
         if self.update_param:
             gait_param['init_z_offset'] = self.init_z_offset
-            self.gait_manager.set_step(period_time, self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude, gait_param, step_num=0)
+            
+            # Применяем адаптацию на основе резонанса, если она активна
+            if self.resonance_detection_enabled and abs(self.current_adaptation_factor - 1.0) > 0.01:
+                adapted_x_amp = self.x_move_amplitude * self.current_adaptation_factor
+                adapted_y_amp = self.y_move_amplitude * self.current_adaptation_factor
+                adapted_angle_amp = self.angle_move_amplitude * self.current_adaptation_factor
+                
+                # Также адаптируем период времени для большей стабильности при резонансе
+                adapted_period_time = list(period_time)
+                if self.current_adaptation_factor < 0.8:
+                    adapted_period_time[0] = int(period_time[0] * (1.0 + (1.0 - self.current_adaptation_factor) * 0.3))
+                
+                self.gait_manager.set_step(
+                    adapted_period_time,
+                    adapted_x_amp,
+                    adapted_y_amp,
+                    adapted_angle_amp,
+                    gait_param,
+                    step_num=0
+                )
+            else:
+                # Нормальная установка параметров без адаптации
+                self.gait_manager.set_step(period_time, self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude, gait_param, step_num=0)
         
         if self.status == 'stop' and self.update_param: self.status = 'move'
         elif self.status == 'move' and not self.update_param:
             self.status = 'stop'
             self.gait_manager.stop()
+            # Сбрасываем адаптацию при остановке
+            self.current_adaptation_factor = 1.0
 
     def height_callback(self, axes):
         """Handles height adjustment."""
