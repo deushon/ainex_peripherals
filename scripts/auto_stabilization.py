@@ -7,25 +7,28 @@
 
 # ========== КОНФИГУРАЦИЯ ==========
 # Параметры автостабилизации
-ACCEL_THRESHOLD = 0.3  # Порог ускорения для срабатывания (м/с²)
+ACCEL_CHANGE_THRESHOLD = 0.08  # Порог ИЗМЕНЕНИЯ ускорения для срабатывания (м/с²) - увеличен для уменьшения ложных срабатываний
 STEP_AMPLITUDE_BASE = 0.008  # Базовая амплитуда шага
-STEP_AMPLITUDE_MAX = 0.020  # Максимальная амплитуда шага
-ACCEL_MAX_FOR_MAX_STEP = 2.0  # Максимальное ускорение для максимального шага
-COOLDOWN_DURATION = 2.2  # Длительность охлаждения после шага (сек)
+STEP_AMPLITUDE_MAX = 0.050  # Максимальная амплитуда шага
+ACCEL_MAX_FOR_MAX_STEP = 1.0  # Максимальное изменение ускорения для максимального шага
+COOLDOWN_DURATION = 3.2  # Длительность охлаждения после шага (сек)
 
 # Калибровка гравитации
-GRAVITY_BASE_Y_DEFAULT = 9.8  # Начальное значение гравитации
 CALIBRATION_SAMPLES = 30  # Количество образцов для калибровки
+CALIBRATION_STABILITY_THRESHOLD = 0.1  # Порог стабильности для калибровки (м/с²)
 
 # Фильтрация ускорений
-FILTER_ALPHA = 0.8  # Коэффициент экспоненциального фильтра (0.0-1.0)
+FILTER_ALPHA = 0.7  # Коэффициент экспоненциального фильтра (0.0-1.0, меньше = больше сглаживание)
 
 # Пороги для проверки движения от джойстика
 JOYSTICK_MOVE_THRESHOLD = 0.001  # Минимальная амплитуда для определения движения
 
 # Параметры скорости шага
-SPEED_FACTOR_MIN = 0.7  # Минимальный множитель скорости (быстрый шаг)
-SPEED_FACTOR_NORMAL = 1.0  # Нормальный множитель скорости
+SPEED_FACTOR_MIN = 0.2  # Минимальный множитель скорости (быстрый шаг)
+SPEED_FACTOR_NORMAL = 0.6 # Нормальный множитель скорости
+
+# История для анализа изменения ускорения
+ACCEL_HISTORY_SIZE = 5  # Размер истории для анализа изменения ускорения
 # ===================================
 
 import rospy
@@ -55,7 +58,7 @@ class AutoStabilization:
         
         # Параметры автостабилизации (из конфига)
         self.enabled = True
-        self.accel_threshold = ACCEL_THRESHOLD
+        self.accel_change_threshold = ACCEL_CHANGE_THRESHOLD
         self.step_amplitude_base = STEP_AMPLITUDE_BASE
         self.step_amplitude_max = STEP_AMPLITUDE_MAX
         self.accel_max_for_max_step = ACCEL_MAX_FOR_MAX_STEP
@@ -65,8 +68,8 @@ class AutoStabilization:
         self.cooldown_end_time = 0
         self.cooldown_duration = COOLDOWN_DURATION
         
-        # Калибровка гравитации
-        self.gravity_base_y = GRAVITY_BASE_Y_DEFAULT
+        # Калибровка гравитации (используем преобразованные значения)
+        self.gravity_base_y = None  # Будет установлено при калибровке
         self.gravity_calibrated = False
         self.calibration_samples = CALIBRATION_SAMPLES
         self.calibration_data = []
@@ -76,15 +79,20 @@ class AutoStabilization:
         self.filter_alpha = FILTER_ALPHA
         self.filtered_accel = {'x': 0.0, 'y': 0.0}
         
+        # История ускорений для анализа изменения
+        self.accel_history = {'x': [], 'y': []}
+        self.accel_history_size = ACCEL_HISTORY_SIZE
+        
         rospy.loginfo("AutoStabilization module initialized")
     
     def update_calibration(self, ax, ay):
         """
         Обновляет калибровку базового значения гравитации.
+        Проверяет стабильность данных перед калибровкой.
         
         Args:
-            ax: Ускорение по оси X
-            ay: Ускорение по оси Y
+            ax: Ускорение по оси X (преобразованное)
+            ay: Ускорение по оси Y (преобразованное)
         """
         if not self.calibration_in_progress:
             return
@@ -95,14 +103,23 @@ class AutoStabilization:
             self.calibration_data.pop(0)
         
         if len(self.calibration_data) >= self.calibration_samples:
-            # Вычисляем среднее значение гравитации
-            avg_y = sum(d['y'] for d in self.calibration_data) / len(self.calibration_data)
-            self.gravity_base_y = avg_y
-            self.gravity_calibrated = True
-            self.calibration_in_progress = False
-            self.calibration_data = []
+            # Проверяем стабильность данных
+            y_values = [d['y'] for d in self.calibration_data]
+            y_mean = sum(y_values) / len(y_values)
+            y_variance = sum((y - y_mean) ** 2 for y in y_values) / len(y_values)
+            y_std = math.sqrt(y_variance)
             
-            rospy.loginfo(f"AutoStabilization calibration complete. Gravity base Y: {self.gravity_base_y:.3f} m/s²")
+            # Если данные стабильны (низкое стандартное отклонение), калибруем
+            if y_std < CALIBRATION_STABILITY_THRESHOLD:
+                self.gravity_base_y = y_mean
+                self.gravity_calibrated = True
+                self.calibration_in_progress = False
+                self.calibration_data = []
+                
+                rospy.loginfo(f"AutoStabilization calibration complete. Gravity base Y: {self.gravity_base_y:.3f} m/s² (std: {y_std:.3f})")
+            else:
+                # Данные нестабильны, продолжаем сбор
+                rospy.logdebug(f"Calibration: data not stable (std: {y_std:.3f} > {CALIBRATION_STABILITY_THRESHOLD}), continuing...")
     
     def process(self, ax, ay, robot_state, status, x_move_amp, y_move_amp, angle_move_amp):
         """
@@ -147,114 +164,155 @@ class AutoStabilization:
             return False
         
         # Фильтрация ускорений
-        ay_deviation = ay - self.gravity_base_y
+        if self.gravity_base_y is not None:
+            ay_deviation = ay - self.gravity_base_y
+        else:
+            ay_deviation = ay  # Если еще не откалибровано, используем как есть
+        
         self.filtered_accel['x'] = self.filter_alpha * ax + (1 - self.filter_alpha) * self.filtered_accel['x']
         self.filtered_accel['y'] = self.filter_alpha * ay_deviation + (1 - self.filter_alpha) * self.filtered_accel['y']
         
-        # Определение направления и величины отклонения
-        fx = self.filtered_accel['x']
-        fy = self.filtered_accel['y']
+        # Добавляем в историю для анализа изменения
+        self.accel_history['x'].append(self.filtered_accel['x'])
+        self.accel_history['y'].append(self.filtered_accel['y'])
         
-        # Вычисляем величину отклонения
-        magnitude = math.sqrt(fx * fx + fy * fy)
+        # Ограничиваем размер истории
+        if len(self.accel_history['x']) > self.accel_history_size:
+            self.accel_history['x'].pop(0)
+            self.accel_history['y'].pop(0)
         
-        # Проверка порога
-        if magnitude < self.accel_threshold:
+        # Нужно минимум данных для анализа изменения
+        if len(self.accel_history['x']) < 3:
             return False
         
-        # Определяем направление (приоритет: вперед/назад, затем влево/вправо)
+        # Вычисляем ИЗМЕНЕНИЕ ускорения (производную)
+        # Берем разницу между последним и предыдущим значением
+        change_x = self.accel_history['x'][-1] - self.accel_history['x'][-2]
+        change_y = self.accel_history['y'][-1] - self.accel_history['y'][-2]
+        
+        # Вычисляем величину изменения
+        change_magnitude = math.sqrt(change_x * change_x + change_y * change_y)
+        
+        # Проверка порога ИЗМЕНЕНИЯ (не абсолютного значения!)
+        if change_magnitude < self.accel_change_threshold:
+            return False
+        
+        # Проверка на стабильность: если ускорение не меняется (постоянное смещение), не делаем шаг
+        # Проверяем, что изменение действительно значительное, а не просто шум
+        if len(self.accel_history['x']) >= 3:
+            # Проверяем, что знак изменения стабилен (не качание)
+            # Берем последние 3 изменения
+            changes_x = []
+            changes_y = []
+            for i in range(len(self.accel_history['x'])-1, max(0, len(self.accel_history['x'])-4), -1):
+                if i > 0:
+                    changes_x.append(self.accel_history['x'][i] - self.accel_history['x'][i-1])
+            for i in range(len(self.accel_history['y'])-1, max(0, len(self.accel_history['y'])-4), -1):
+                if i > 0:
+                    changes_y.append(self.accel_history['y'][i] - self.accel_history['y'][i-1])
+            
+            # Если знаки меняются - это качание, не делаем шаг
+            if changes_x and len(set(1 if c >= 0 else -1 for c in changes_x)) > 1:
+                return False
+            if changes_y and len(set(1 if c >= 0 else -1 for c in changes_y)) > 1:
+                return False
+        
+        # Определяем направление по ИЗМЕНЕНИЮ ускорения (приоритет: вперед/назад, затем влево/вправо)
         step_x = 0.0
         step_y = 0.0
         
-        if abs(fy) > abs(fx):
-            # Доминирует отклонение вперед/назад
-            if fy < -self.accel_threshold:
-                # Падение назад - шаг назад
-                step_x = -self._calculate_step_amplitude(abs(fy))
-            elif fy > self.accel_threshold:
-                # Падение вперед - шаг вперед
-                step_x = self._calculate_step_amplitude(abs(fy))
+        if abs(change_y) > abs(change_x):
+            # Доминирует изменение вперед/назад
+            if change_y < -self.accel_change_threshold:
+                # Ускорение уменьшается назад - шаг назад
+                step_x = -self._calculate_step_amplitude(change_magnitude)
+            elif change_y > self.accel_change_threshold:
+                # Ускорение увеличивается вперед - шаг вперед
+                step_x = self._calculate_step_amplitude(change_magnitude)
         else:
-            # Доминирует отклонение влево/вправо
-            if fx > self.accel_threshold:
-                # Падение вправо - шаг вправо
-                step_y = self._calculate_step_amplitude(abs(fx))
-            elif fx < -self.accel_threshold:
-                # Падение влево - шаг влево
-                step_y = -self._calculate_step_amplitude(abs(fx))
+            # Доминирует изменение влево/вправо
+            if change_x > self.accel_change_threshold:
+                # Ускорение увеличивается вправо - шаг вправо
+                step_y = self._calculate_step_amplitude(change_magnitude)
+            elif change_x < -self.accel_change_threshold:
+                # Ускорение увеличивается влево - шаг влево
+                step_y = -self._calculate_step_amplitude(change_magnitude)
         
         if abs(step_x) < JOYSTICK_MOVE_THRESHOLD and abs(step_y) < JOYSTICK_MOVE_THRESHOLD:
             return False
         
         # Выполняем шаг
-        self._make_step(step_x, step_y, magnitude)
+        self._make_step(step_x, step_y, change_magnitude)
         
         # Устанавливаем охлаждение
         self.cooldown_end_time = current_time + self.cooldown_duration
         self.last_step_time = current_time
         
-        rospy.loginfo(f"AutoStabilization: Step executed (x={step_x:.4f}, y={step_y:.4f}, magnitude={magnitude:.3f} m/s²), cooldown={self.cooldown_duration}s")
+        # Очищаем историю после шага для предотвращения накопления ошибок
+        self.accel_history = {'x': [], 'y': []}
+        
+        rospy.loginfo(f"AutoStabilization: Step executed (x={step_x:.4f}, y={step_y:.4f}, change={change_magnitude:.3f} m/s²), cooldown={self.cooldown_duration}s")
         
         return True
     
-    def _calculate_step_amplitude(self, accel_magnitude):
+    def _calculate_step_amplitude(self, change_magnitude):
         """
-        Вычисляет амплитуду шага на основе величины ускорения.
+        Вычисляет амплитуду шага на основе величины ИЗМЕНЕНИЯ ускорения.
         
         Args:
-            accel_magnitude: Величина ускорения
+            change_magnitude: Величина изменения ускорения
         
         Returns:
             float: Амплитуда шага
         """
-        if accel_magnitude <= self.accel_threshold:
+        if change_magnitude <= self.accel_change_threshold:
             return self.step_amplitude_base
         
-        if accel_magnitude >= self.accel_max_for_max_step:
+        if change_magnitude >= self.accel_max_for_max_step:
             return self.step_amplitude_max
         
         # Линейная интерполяция
-        ratio = (accel_magnitude - self.accel_threshold) / (self.accel_max_for_max_step - self.accel_threshold)
+        ratio = (change_magnitude - self.accel_change_threshold) / (self.accel_max_for_max_step - self.accel_change_threshold)
         return self.step_amplitude_base + (self.step_amplitude_max - self.step_amplitude_base) * ratio
     
-    def _calculate_step_speed(self, accel_magnitude):
+    def _calculate_step_speed(self, change_magnitude):
         """
-        Вычисляет скорость шага на основе величины ускорения.
-        Больше ускорение = быстрее шаг.
+        Вычисляет скорость шага на основе величины ИЗМЕНЕНИЯ ускорения.
+        Больше изменение = быстрее шаг.
         
         Args:
-            accel_magnitude: Величина ускорения
+            change_magnitude: Величина изменения ускорения
         
         Returns:
             float: Множитель скорости (1.0 = нормальная, <1.0 = медленнее, >1.0 = быстрее)
         """
-        if accel_magnitude <= self.accel_threshold:
+        if change_magnitude <= self.accel_change_threshold:
             return SPEED_FACTOR_NORMAL
         
-        if accel_magnitude >= self.accel_max_for_max_step:
+        if change_magnitude >= self.accel_max_for_max_step:
             return SPEED_FACTOR_MIN  # Быстрый шаг (уменьшаем период на 30%)
         
         # Линейная интерполяция от нормальной до минимальной скорости
-        ratio = (accel_magnitude - self.accel_threshold) / (self.accel_max_for_max_step - self.accel_threshold)
+        ratio = (change_magnitude - self.accel_change_threshold) / (self.accel_max_for_max_step - self.accel_change_threshold)
         speed_reduction = SPEED_FACTOR_NORMAL - SPEED_FACTOR_MIN
         return SPEED_FACTOR_NORMAL - ratio * speed_reduction
     
-    def _make_step(self, step_x, step_y, accel_magnitude):
+    def _make_step(self, step_x, step_y, change_magnitude):
         """
         Выполняет шаг стабилизации.
         
         Args:
             step_x: Шаг вперед/назад (положительный = вперед)
             step_y: Шаг влево/вправо (положительный = вправо)
-            accel_magnitude: Величина ускорения для расчета скорости
+            change_magnitude: Величина изменения ускорения для расчета скорости
         """
         try:
             gait_param = self.gait_manager.get_gait_param()
             params = self.speed_params[self.speed_mode]
             period_time = list(params['period_time'])
             
-            # Вычисляем скорость шага на основе ускорения
-            speed_factor = self._calculate_step_speed(accel_magnitude)
+            # Вычисляем скорость шага на основе изменения ускорения
+            speed_factor = self._calculate_step_speed(change_magnitude)
             period_time[0] = int(period_time[0] * speed_factor)
             
             if self.speed_mode > 1:
@@ -279,4 +337,5 @@ class AutoStabilization:
         self.cooldown_end_time = 0
         self.last_step_time = 0
         self.filtered_accel = {'x': 0.0, 'y': 0.0}
+        self.accel_history = {'x': [], 'y': []}
 
