@@ -7,11 +7,35 @@
 
 # ========== КОНФИГУРАЦИЯ ==========
 # Параметры автостабилизации
-ACCEL_CHANGE_THRESHOLD = 0.08  # Порог ИЗМЕНЕНИЯ ускорения для срабатывания (м/с²) - увеличен для уменьшения ложных срабатываний
-STEP_AMPLITUDE_BASE = 0.008  # Базовая амплитуда шага
-STEP_AMPLITUDE_MAX = 0.050  # Максимальная амплитуда шага
+ACCEL_CHANGE_THRESHOLD = 0.03  # Порог ИЗМЕНЕНИЯ ускорения для срабатывания (м/с²) - увеличен для уменьшения ложных срабатываний
+STEP_AMPLITUDE_BASE = 0.020  # Базовая амплитуда шага (минимальная)
+STEP_AMPLITUDE_MAX = 0.020  # Максимальная амплитуда шага
 ACCEL_MAX_FOR_MAX_STEP = 1.0  # Максимальное изменение ускорения для максимального шага
-COOLDOWN_DURATION = 3.2  # Длительность охлаждения после шага (сек)
+COOLDOWN_DURATION = 3 # Длительность охлаждения после шага (сек)
+
+# Маппинг изменения ускорения на направление шага
+# Определяет, в какую сторону делать шаг при изменении ускорения по каждой оси
+# Формат: (ось, знак_изменения) -> (направление_шага_x, направление_шага_y)
+# где:
+#   ось: 'x' (влево/вправо) или 'y' (вперед/назад)
+#   знак_изменения: '+' (положительное изменение) или '-' (отрицательное изменение)
+#   направление_шага_x: 'forward' (вперед, +), 'backward' (назад, -), или None
+#   направление_шага_y: 'right' (вправо, +), 'left' (влево, -), или None
+STEP_DIRECTION_MAP = {
+    # Изменение по оси X (влево/вправо)
+    ('x', '+'): (None, 'left'),   # Ускорение увеличивается вправо -> шаг вправо
+    ('x', '-'): (None, 'right'),    # Ускорение увеличивается влево -> шаг влево
+    # Изменение по оси Y (вперед/назад)
+    ('y', '+'): ('forward', None), # Ускорение увеличивается вперед -> шаг вперед
+    ('y', '-'): ('backward', None), # Ускорение уменьшается (падаем назад) -> шаг назад
+}
+
+# Приоритет осей при одновременном изменении (какая ось важнее)
+# Если обе оси превышают порог, используется ось с более высоким приоритетом
+AXIS_PRIORITY = {
+    'y': 1,  # Ось Y (вперед/назад) имеет приоритет 1 (высший)
+    'x': 2,  # Ось X (влево/вправо) имеет приоритет 2
+}
 
 # Калибровка гравитации
 CALIBRATION_SAMPLES = 30  # Количество образцов для калибровки
@@ -217,26 +241,49 @@ class AutoStabilization:
             if changes_y and len(set(1 if c >= 0 else -1 for c in changes_y)) > 1:
                 return False
         
-        # Определяем направление по ИЗМЕНЕНИЮ ускорения (приоритет: вперед/назад, затем влево/вправо)
+        # Определяем направление шага на основе конфигурации STEP_DIRECTION_MAP
         step_x = 0.0
         step_y = 0.0
         
-        if abs(change_y) > abs(change_x):
-            # Доминирует изменение вперед/назад
-            if change_y < -self.accel_change_threshold:
-                # Ускорение уменьшается назад - шаг назад
-                step_x = -self._calculate_step_amplitude(change_magnitude)
-            elif change_y > self.accel_change_threshold:
-                # Ускорение увеличивается вперед - шаг вперед
-                step_x = self._calculate_step_amplitude(change_magnitude)
-        else:
-            # Доминирует изменение влево/вправо
-            if change_x > self.accel_change_threshold:
-                # Ускорение увеличивается вправо - шаг вправо
-                step_y = self._calculate_step_amplitude(change_magnitude)
-            elif change_x < -self.accel_change_threshold:
-                # Ускорение увеличивается влево - шаг влево
-                step_y = -self._calculate_step_amplitude(change_magnitude)
+        # Проверяем изменения по каждой оси
+        axes_changes = []
+        if abs(change_x) >= self.accel_change_threshold:
+            sign = '+' if change_x > 0 else '-'
+            axes_changes.append(('x', sign, abs(change_x), AXIS_PRIORITY['x']))
+        if abs(change_y) >= self.accel_change_threshold:
+            sign = '+' if change_y > 0 else '-'
+            axes_changes.append(('y', sign, abs(change_y), AXIS_PRIORITY['y']))
+        
+        if not axes_changes:
+            return False
+        
+        # Сортируем по приоритету (меньший номер = выше приоритет)
+        axes_changes.sort(key=lambda x: x[3])
+        
+        # Берем ось с наивысшим приоритетом
+        selected_axis, selected_sign, selected_magnitude, _ = axes_changes[0]
+        
+        # Получаем направление шага из конфигурации
+        direction_key = (selected_axis, selected_sign)
+        if direction_key not in STEP_DIRECTION_MAP:
+            rospy.logwarn(f"AutoStabilization: No direction mapping for {direction_key}")
+            return False
+        
+        step_dir_x, step_dir_y = STEP_DIRECTION_MAP[direction_key]
+        
+        # Вычисляем амплитуду шага в диапазоне [STEP_AMPLITUDE_BASE, STEP_AMPLITUDE_MAX]
+        step_amplitude = self._calculate_step_amplitude(change_magnitude)
+        
+        # Применяем направление
+        if step_dir_x == 'forward':
+            step_x = step_amplitude
+        elif step_dir_x == 'backward':
+            step_x = -step_amplitude
+        
+        if step_dir_y == 'right':
+            step_y = step_amplitude
+        elif step_dir_y == 'left':
+            step_y = -step_amplitude
         
         if abs(step_x) < JOYSTICK_MOVE_THRESHOLD and abs(step_y) < JOYSTICK_MOVE_THRESHOLD:
             return False
@@ -258,22 +305,27 @@ class AutoStabilization:
     def _calculate_step_amplitude(self, change_magnitude):
         """
         Вычисляет амплитуду шага на основе величины ИЗМЕНЕНИЯ ускорения.
+        Гарантирует, что результат находится в диапазоне [STEP_AMPLITUDE_BASE, STEP_AMPLITUDE_MAX].
         
         Args:
             change_magnitude: Величина изменения ускорения
         
         Returns:
-            float: Амплитуда шага
+            float: Амплитуда шага в диапазоне [STEP_AMPLITUDE_BASE, STEP_AMPLITUDE_MAX]
         """
         if change_magnitude <= self.accel_change_threshold:
-            return self.step_amplitude_base
+            amplitude = self.step_amplitude_base
+        elif change_magnitude >= self.accel_max_for_max_step:
+            amplitude = self.step_amplitude_max
+        else:
+            # Линейная интерполяция между базовой и максимальной амплитудой
+            ratio = (change_magnitude - self.accel_change_threshold) / (self.accel_max_for_max_step - self.accel_change_threshold)
+            amplitude = self.step_amplitude_base + (self.step_amplitude_max - self.step_amplitude_base) * ratio
         
-        if change_magnitude >= self.accel_max_for_max_step:
-            return self.step_amplitude_max
+        # Гарантируем, что амплитуда в заданном диапазоне
+        amplitude = max(self.step_amplitude_base, min(self.step_amplitude_max, amplitude))
         
-        # Линейная интерполяция
-        ratio = (change_magnitude - self.accel_change_threshold) / (self.accel_max_for_max_step - self.accel_change_threshold)
-        return self.step_amplitude_base + (self.step_amplitude_max - self.step_amplitude_base) * ratio
+        return amplitude
     
     def _calculate_step_speed(self, change_magnitude):
         """
