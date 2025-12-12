@@ -43,57 +43,59 @@ class SpeedControl:
         rospy.loginfo("SpeedControl module initialized")
     
     def _setup_speed_parameters(self):
-        """Инициализирует словарь с параметрами для каждого режима скорости."""
+        """
+        Инициализирует словарь с параметрами для каждого режима скорости.
+        Только 3 режима: 1 (медленный), 2 (средний), 3 (быстрый).
+        Эти параметры задают начальные значения, которые могут быть переопределены
+        стабилизацией при ходьбе только в меньшую сторону (для большей стабильности).
+        """
         return {
             1: {
-                'period_time': [400, 0.2, 0.022],
+                'period_time': [500, 0.2, 0.022],  # Медленный режим
                 'x_amp': 0.01,
                 'y_amp': 0.015,
                 'angle_amp': 8,
-                'z_move_amplitude': 0.025
+                'z_move_amplitude': 0.025,
+                'gait_base': {
+                    'dsp_ratio': 0.25,  # Больше стабильности
+                    'step_fb_ratio': 0.030,  # Дистанция шага
+                    'y_swap_amplitude': 0.02,
+                    'z_swap_amplitude': 0.006,
+                    'init_y_offset': -0.005,
+                    'init_roll_offset': 0.0,
+                    'init_pitch_offset': 0.0
+                }
             },
             2: {
-                'period_time': [500, 0.2, 0.028],
+                'period_time': [400, 0.2, 0.028],  # Средний режим
                 'x_amp': 0.015,
                 'y_amp': 0.015,
                 'angle_amp': 10,
                 'z_move_amplitude': 0.02,
                 'gait_base': {
                     'dsp_ratio': 0.2,
-                    'step_fb_ratio': 0.028,
+                    'step_fb_ratio': 0.028,  # Дистанция шага
                     'y_swap_amplitude': 0.02,
                     'z_swap_amplitude': 0.006,
-                    'init_y_offset': -0.008
+                    'init_y_offset': -0.005,
+                    'init_roll_offset': 0.0,
+                    'init_pitch_offset': 0.0
                 }
             },
             3: {
-                'period_time': [400, 0.2, 0.028],
+                'period_time': [300, 0.2, 0.028],  # Быстрый режим
                 'x_amp': 0.01,
                 'y_amp': 0.015,
                 'angle_amp': 10,
-                'z_move_amplitude': 0.02,
-                'gait_base': {
-                    'dsp_ratio': 0.2,
-                    'init_y_offset': -0.005,
-                    'step_fb_ratio': 0.028,
-                    'y_swap_amplitude': 0.02,
-                    'z_swap_amplitude': 0.006
-                }
-            },
-            4: {
-                'period_time': [300, 0.2, 0.028],
-                'x_amp': 0.01,
-                'y_amp': 0.015,
-                'angle_amp': 8,
                 'z_move_amplitude': 0.015,
                 'gait_base': {
-                    'dsp_ratio': 0.2,
-                    'init_y_offset': -0.008,
-                    'step_fb_ratio': 0.028,
+                    'dsp_ratio': 0.18,  # Меньше стабильности, но быстрее
+                    'step_fb_ratio': 0.025,  # Дистанция шага
                     'y_swap_amplitude': 0.021,
                     'z_swap_amplitude': 0.006,
-                    'pelvis_offset': 5,
-                    'arm_swing_gain': 0.5
+                    'init_y_offset': -0.008,
+                    'init_roll_offset': 0.0,
+                    'init_pitch_offset': 0.0
                 }
             }
         }
@@ -148,29 +150,9 @@ class SpeedControl:
         params = self.speed_params[self.speed_mode]
         period_time = list(params['period_time'])
         
-        if self.speed_mode > 1:
-            gait_param.update(params.get('gait_base', {}))
-        
-        # Условная логика для разных режимов скорости
-        if self.speed_mode == 1 and abs(axes['lx']) > AXIS_THRESHOLD:
-            period_time[2] = 0.025
-        elif self.speed_mode == 2:
-            if abs(axes['rx']) > AXIS_THRESHOLD and abs(axes['lx']) < AXIS_THRESHOLD and abs(axes['ly']) < AXIS_THRESHOLD:
-                gait_param.update({'init_roll_offset': 0, 'init_y_offset': -0.005, 'y_swap_amplitude': 0.022})
-            if abs(axes['lx']) > AXIS_THRESHOLD and abs(axes['ly']) < AXIS_THRESHOLD and abs(axes['rx']) < AXIS_THRESHOLD:
-                gait_param.update({'init_y_offset': -0.005, 'y_swap_amplitude': 0.028, 'init_roll_offset': 3})
-        elif self.speed_mode == 3:
-            if abs(axes['rx']) > AXIS_THRESHOLD and abs(axes['lx']) < AXIS_THRESHOLD and abs(axes['ly']) < AXIS_THRESHOLD:
-                gait_param['y_swap_amplitude'] = 0.022
-            if abs(axes['lx']) > AXIS_THRESHOLD and abs(axes['ly']) < AXIS_THRESHOLD and abs(axes['rx']) < AXIS_THRESHOLD:
-                gait_param.update({'init_y_offset': 0, 'init_roll_offset': 3, 'y_swap_amplitude': 0.025})
-        elif self.speed_mode == 4:
-            if abs(axes['ly']) > AXIS_THRESHOLD:
-                gait_param['init_roll_offset'] = -3
-            if abs(axes['lx']) > AXIS_THRESHOLD and abs(axes['ly']) < AXIS_THRESHOLD and abs(axes['rx']) < AXIS_THRESHOLD:
-                gait_param['init_roll_offset'] = -1.0
-            if abs(axes['rx']) > AXIS_THRESHOLD and abs(axes['lx']) < AXIS_THRESHOLD and abs(axes['ly']) < AXIS_THRESHOLD:
-                gait_param['init_roll_offset'] = -3
+        # Применяем базовые параметры режима скорости
+        # Стабилизация при ходьбе может переопределить их только в меньшую сторону
+        gait_param.update(params.get('gait_base', {}))
         
         # Вычисляем амплитуды движения
         if abs(axes['ly']) > AXIS_THRESHOLD:
@@ -256,12 +238,12 @@ class SpeedControl:
         Устанавливает режим скорости.
         
         Args:
-            mode: Режим скорости (1-4)
+            mode: Режим скорости (1-3): 1=медленный, 2=средний, 3=быстрый
         
         Returns:
             bool: True если режим установлен успешно
         """
-        if 1 <= mode <= 4:
+        if 1 <= mode <= 3:
             self.speed_mode = mode
             rospy.loginfo(f"Speed mode set to: {self.speed_mode}")
             return True
