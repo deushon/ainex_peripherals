@@ -185,36 +185,35 @@ class ButtonActions:
             except Exception as e:
                 rospy.logerr(f"Error calling MotionManager.run_action('{action_to_run}'): {e}")
     
-    def start_callback(self, new_state, init_z_offset_getter, init_z_offset_setter):
+    def start_callback(self, new_state, height_getter, height_setter):
         """Обработчик кнопки Start - сброс высоты робота."""
         if new_state == BUTTON_PRESSED:
             rospy.loginfo("Start button pressed. Resetting body height.")
             self.board.set_buzzer(BUZZER_START_FREQ, BUZZER_DURATION, BUZZER_PAUSE, BUZZER_REPEATS)
-            current_height = init_z_offset_getter()
-            new_height = self.reset_height(current_height)
-            init_z_offset_setter(new_height)
+            # reset_height теперь использует единый источник истины через speed_control
+            new_height = self.reset_height(HEIGHT_RESET_TARGET)
+            height_setter(new_height)
     
-    def reset_height(self, init_z_offset, target_height=HEIGHT_RESET_TARGET):
+    def reset_height(self, target_height=HEIGHT_RESET_TARGET):
         """
         Сбрасывает высоту робота до целевого значения.
+        Использует единый метод set_body_height из speed_control.
         
         Args:
-            init_z_offset: Текущее смещение по Z
             target_height: Целевая высота
         
         Returns:
-            float: Новое значение init_z_offset
+            float: Новое значение высоты
         """
-        gait_param = self.gait_manager.get_gait_param()
-        t = int(abs(target_height - init_z_offset) / HEIGHT_RESET_STEP)
+        # Получаем текущую высоту из gait_manager через speed_control
+        current_height = self.speed_control.get_body_height()
+        t = int(abs(target_height - current_height) / HEIGHT_RESET_STEP)
         if t != 0:
-            direction = math.copysign(1, target_height - init_z_offset)
+            direction = math.copysign(1, target_height - current_height)
             for _ in range(t):
-                init_z_offset += HEIGHT_RESET_STEP * direction
-                gait_param['body_height'] = init_z_offset
-                params = self.speed_control.get_speed_params()[1]
-                gait_param['z_move_amplitude'] = params['z_move_amplitude']
-                self.gait_manager.update_param(params['period_time'], 0.0, 0.0, 0.0, gait_param, step_num=1)
+                current_height += HEIGHT_RESET_STEP * direction
+                # Используем единый метод для установки высоты
+                self.speed_control.set_body_height(current_height)
                 time.sleep(HEIGHT_RESET_DELAY)
-        return init_z_offset
+        return self.speed_control.get_body_height()
 

@@ -122,7 +122,6 @@ class JoystickController:
         
         # --- State Variables ---
         self.status = 'stop'
-        self.init_z_offset = INIT_Z_OFFSET
         self.time_stamp_ry = 0
         self.last_axes = dict(zip(AXES_MAP, [0.0] * len(AXES_MAP)))
         self.last_buttons = dict(zip(BUTTON_MAP, [0.0] * len(BUTTON_MAP)))
@@ -141,16 +140,21 @@ class JoystickController:
         self.speed_control = SpeedControl(self.gait_manager)
         self.imu_handler = IMUHandler()
         
+        # Инициализируем высоту через единый метод (после создания speed_control)
+        self.speed_control.set_body_height(INIT_Z_OFFSET)
+        
         # Инициализируем переменные для движения (нужны для автостабилизации)
         self.x_move_amplitude = 0
         self.y_move_amplitude = 0
         self.angle_move_amplitude = 0
         
+        # Получаем начальную высоту из gait_manager (единый источник истины)
+        initial_height = self.speed_control.get_body_height()
         self.auto_stabilization = AutoStabilization(
             self.gait_manager,
             self.speed_control.get_speed_params(),
             self.speed_control.get_speed_mode(),
-            self.init_z_offset
+            initial_height
         )
         self.button_actions = ButtonActions(
             self.board,
@@ -318,13 +322,17 @@ class JoystickController:
             self.auto_stabilization.speed_mode = current_speed_mode
             self.auto_stabilization.speed_params = self.speed_control.get_speed_params()
         
+        # Синхронизируем высоту из gait_manager в auto_stabilization
+        current_height = self.speed_control.get_body_height()
+        if abs(self.auto_stabilization.init_z_offset - current_height) > 0.001:
+            self.auto_stabilization.init_z_offset = current_height
+        
         # Получаем фактор адаптации от IMU handler
         adaptation_factor = self.imu_handler.check_resonance(self.status)
         
-        # Обрабатываем оси через speed_control
+        # Обрабатываем оси через speed_control (высота берется из gait_manager)
         x_move_amp, y_move_amp, angle_move_amp, status = self.speed_control.process_axes(
             axes,
-            self.init_z_offset,
             adaptation_factor
         )
         
@@ -336,19 +344,29 @@ class JoystickController:
         # Сбрасываем адаптацию при остановке
         if self.status == 'stop':
             self.imu_handler.reset_adaptation()
+    
+    def _update_height_in_all_modules(self, height):
+        """
+        Обновляет высоту во всех модулях через единый источник истины.
+        
+        Args:
+            height: Новая высота
+        """
+        # Устанавливаем через speed_control (единый источник)
+        self.speed_control.set_body_height(height)
+        # Синхронизируем с auto_stabilization
+        self.auto_stabilization.init_z_offset = self.speed_control.get_body_height()
 
     def height_callback(self, axes):
         """Обработчик изменения высоты."""
         new_height, new_timestamp, updated = self.speed_control.process_height(
             axes,
-            self.init_z_offset,
             self.time_stamp_ry
         )
-        if updated:
-            self.init_z_offset = new_height
+        if updated and new_height is not None:
             self.time_stamp_ry = new_timestamp
-            # Обновляем init_z_offset в auto_stabilization
-            self.auto_stabilization.init_z_offset = self.init_z_offset
+            # Обновляем высоту в auto_stabilization (синхронизация через gait_manager)
+            self.auto_stabilization.init_z_offset = new_height
 
     def joy_callback(self, joy_msg):
         """Главный обработчик сообщений джойстика."""
@@ -374,11 +392,12 @@ class JoystickController:
                 if hasattr(self.button_actions, callback_name):
                     try:
                         if callback_name == 'start_callback':
-                            # Специальная обработка для start_callback с передачей функций доступа к init_z_offset
+                            # Специальная обработка для start_callback
+                            # Высота теперь управляется через speed_control (единый источник истины)
                             self.button_actions.start_callback(
                                 new_state,
-                                lambda: self.init_z_offset,
-                                lambda h: setattr(self, 'init_z_offset', h) or setattr(self.auto_stabilization, 'init_z_offset', h)
+                                lambda: self.speed_control.get_body_height(),
+                                lambda h: self._update_height_in_all_modules(h)
                             )
                         else:
                             getattr(self.button_actions, callback_name)(new_state)

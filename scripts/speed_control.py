@@ -98,13 +98,42 @@ class SpeedControl:
             }
         }
     
-    def process_axes(self, axes, init_z_offset, adaptation_factor=1.0):
+    def get_body_height(self):
+        """
+        Получает текущую высоту корпуса из gait_manager (единый источник истины).
+        
+        Returns:
+            float: Текущая высота корпуса
+        """
+        gait_param = self.gait_manager.get_gait_param()
+        return gait_param.get('body_height', HEIGHT_DEFAULT)
+    
+    def set_body_height(self, height):
+        """
+        Устанавливает высоту корпуса через gait_manager (единый источник истины).
+        
+        Args:
+            height: Новая высота корпуса (будет ограничена диапазоном)
+        """
+        height = max(HEIGHT_MIN, min(HEIGHT_MAX, height))
+        gait_param = self.gait_manager.get_gait_param()
+        gait_param['body_height'] = height
+        # Обновляем параметры без движения
+        params = self.speed_params[1]  # Используем параметры режима 1 для высоты
+        self.gait_manager.update_param(
+            params['period_time'],
+            0, 0, 0,
+            gait_param,
+            step_num=0
+        )
+        return height
+    
+    def process_axes(self, axes, adaptation_factor=1.0):
         """
         Обрабатывает данные осей джойстика и устанавливает параметры движения.
         
         Args:
             axes: Словарь с данными осей джойстика
-            init_z_offset: Начальное смещение по Z
             adaptation_factor: Фактор адаптации для резонанса (по умолчанию 1.0)
         
         Returns:
@@ -154,7 +183,8 @@ class SpeedControl:
         update_param = any(abs(amp) > 0 for amp in [x_move_amplitude, y_move_amplitude, angle_move_amplitude])
         
         if update_param:
-            gait_param['init_z_offset'] = init_z_offset
+            # Используем body_height из gait_manager (единый источник истины)
+            # Не устанавливаем init_z_offset, так как body_height уже актуален
             
             # Применяем адаптацию на основе резонанса, если она активна
             if abs(adaptation_factor - 1.0) > RESONANCE_ADAPTATION_THRESHOLD:
@@ -193,41 +223,33 @@ class SpeedControl:
         
         return x_move_amplitude, y_move_amplitude, angle_move_amplitude, status
     
-    def process_height(self, axes, init_z_offset, time_stamp_ry):
+    def process_height(self, axes, time_stamp_ry):
         """
         Обрабатывает изменение высоты робота.
         
         Args:
             axes: Словарь с данными осей джойстика
-            init_z_offset: Текущее смещение по Z
             time_stamp_ry: Временная метка для ограничения частоты обновления
         
         Returns:
-            tuple: (new_init_z_offset, new_time_stamp_ry, updated)
+            tuple: (new_body_height, new_time_stamp_ry, updated)
         """
         current_time = rospy.get_time()
-        new_init_z_offset = init_z_offset
         updated = False
         
         if current_time > time_stamp_ry:
             if abs(axes['ry']) > HEIGHT_AXIS_THRESHOLD:
-                new_init_z_offset -= HEIGHT_STEP * math.copysign(1, axes['ry'])
-                new_init_z_offset = max(HEIGHT_MIN, min(HEIGHT_MAX, new_init_z_offset))
+                # Получаем текущую высоту из gait_manager
+                current_height = self.get_body_height()
+                # Вычисляем новую высоту
+                new_height = current_height - HEIGHT_STEP * math.copysign(1, axes['ry'])
+                # Устанавливаем через единый метод
+                self.set_body_height(new_height)
                 updated = True
-            
-            if updated:
-                gait_param = self.gait_manager.get_gait_param()
-                gait_param['body_height'] = new_init_z_offset
-                params = self.speed_params[1]  # Используем параметры режима 1 для высоты
-                self.gait_manager.update_param(
-                    params['period_time'],
-                    0, 0, 0,
-                    gait_param,
-                    step_num=0
-                )
                 time_stamp_ry = current_time + HEIGHT_UPDATE_INTERVAL
         
-        return new_init_z_offset, time_stamp_ry, updated
+        new_body_height = self.get_body_height() if updated else None
+        return new_body_height, time_stamp_ry, updated
     
     def set_speed_mode(self, mode):
         """
