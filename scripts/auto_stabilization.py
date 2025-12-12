@@ -12,7 +12,7 @@
 
 СТАБИЛИЗАЦИЯ ПРИ ХОДЬБЕ:
 - Динамически корректирует параметры походки на основе IMU данных
-- Не работает во время шагов стабилизации покоя (защита REST_STEP_PROTECTION_DURATION)
+- Работает независимо от стабилизации покоя
 - Динамически изменяемые параметры:
   * period_time[0] - скорость шага (уменьшается для большей стабильности)
   * step_fb_ratio - дистанция шага (уменьшается для большей стабильности)
@@ -61,10 +61,10 @@ WALKING_STABILIZATION_CONFIG = {
     'update_interval': 0.1,
     
     # Флаги включения/выключения параметров корректировки
-    'enable_period_time': True,
+    'enable_period_time': False, #ТРайминги выполненения шага, снижение в большинстве своем ухудшает динамику
     'enable_step_fb_ratio': False,
     'enable_roll_offset': False,
-    'enable_pitch_offset': False,
+    'enable_pitch_offset': True,
     'enable_y_offset': False,
     'enable_y_swap': False,
     'enable_z_swap': False,
@@ -101,7 +101,6 @@ CALIBRATION_STABILITY_THRESHOLD = 0.1
 FILTER_ALPHA = 0.8
 JOYSTICK_MOVE_THRESHOLD = 0.001
 ACCEL_HISTORY_SIZE = 5
-REST_STEP_PROTECTION_DURATION = 2.5
 # ===================================
 
 import rospy
@@ -203,8 +202,9 @@ class AutoStabilization:
                 current_time, robot_state, x_move_amp, y_move_amp, angle_move_amp
             )
         elif status == 'move' and self.walking_enabled:
-            if current_time - self.last_rest_step_time > REST_STEP_PROTECTION_DURATION:
-                self._process_walking_stabilization(current_time)
+            # Убрана защита REST_STEP_PROTECTION_DURATION - она мешала нормальной работе
+            # Стабилизация при ходьбе работает независимо от стабилизации покоя
+            self._process_walking_stabilization(current_time)
         
         return rest_step_executed
     
@@ -301,6 +301,22 @@ class AutoStabilization:
         """Обрабатывает стабилизацию при ходьбе."""
         config = WALKING_STABILIZATION_CONFIG
         
+        # Проверяем, есть ли хотя бы один включенный параметр
+        has_enabled_params = any([
+            config['enable_period_time'],
+            config['enable_step_fb_ratio'],
+            config['enable_roll_offset'],
+            config['enable_pitch_offset'],
+            config['enable_y_offset'],
+            config['enable_y_swap'],
+            config['enable_z_swap'],
+            config['enable_dsp_ratio']
+        ])
+        
+        # Если все параметры выключены, не делаем ничего
+        if not has_enabled_params:
+            return
+        
         if current_time - self.last_walking_update_time < config['update_interval']:
             return
         
@@ -317,57 +333,112 @@ class AutoStabilization:
         gait_param = self.gait_manager.get_gait_param()
         params = self.speed_params[self.speed_mode]
         
-        gait_param.update(params.get('gait_base', {}))
+        # НЕ перезаписываем gait_param базовыми значениями - они уже установлены speed_control
+        # Только получаем базовые значения для расчетов
         period_time = list(params['period_time'])
         base_period_time = period_time[0]
         
-        # ИСПРАВЛЕНИЕ: передаем все необходимые аргументы
         corrections = self._calculate_walking_corrections(
             change_x, change_y, change_magnitude, config, params, base_period_time
         )
         
+        # Если нет корректировок, не обновляем параметры
+        if not corrections:
+            return
+        
         filter_alpha = config['filter_alpha']
+        has_actual_corrections = False
+        
         for key, value in corrections.items():
             if key not in self.walking_filtered_params:
                 self.walking_filtered_params[key] = value
+                has_actual_corrections = True
             else:
+                old_value = self.walking_filtered_params[key]
                 self.walking_filtered_params[key] = (
-                    filter_alpha * value + (1 - filter_alpha) * self.walking_filtered_params[key]
+                    filter_alpha * value + (1 - filter_alpha) * old_value
                 )
+                # Проверяем, изменилось ли значение значительно
+                if abs(self.walking_filtered_params[key] - old_value) > 0.001:
+                    has_actual_corrections = True
         
+        # Если нет реальных изменений, не обновляем параметры
+        if not has_actual_corrections:
+            return
+        
+        # Сохраняем корректировки для применения в speed_control.process_axes
+        # НЕ вызываем update_param - это останавливает движение!
+        # Корректировки будут применены через метод apply_walking_corrections в speed_control
+        
+        self.last_walking_update_time = current_time
+        rospy.logdebug(f"AutoStabilization [WALKING]: Corrections calculated (change={change_magnitude:.3f} m/s²)")
+    
+    def apply_walking_corrections(self, gait_param, period_time):
+        """
+        Применяет корректировки стабилизации при ходьбе к параметрам походки.
+        Вызывается из speed_control.process_axes ПОСЛЕ установки базовых параметров.
+        
+        Args:
+            gait_param: Словарь параметров походки (будет изменен)
+            period_time: Список [period, x_swap, y_swap] (может быть изменен)
+        
+        Returns:
+            bool: True если были применены корректировки
+        """
+        config = WALKING_STABILIZATION_CONFIG
+        
+        # Проверяем, есть ли включенные параметры
+        has_enabled_params = any([
+            config['enable_period_time'],
+            config['enable_step_fb_ratio'],
+            config['enable_roll_offset'],
+            config['enable_pitch_offset'],
+            config['enable_y_offset'],
+            config['enable_y_swap'],
+            config['enable_z_swap'],
+            config['enable_dsp_ratio']
+        ])
+        
+        if not has_enabled_params:
+            return False
+        
+        applied = False
+        
+        # Применяем корректировки периода времени
         if config['enable_period_time'] and 'period_time' in self.walking_filtered_params:
             period_time[0] = int(self.walking_filtered_params['period_time'])
+            applied = True
         
+        # Применяем корректировки параметров походки
         if config['enable_step_fb_ratio'] and 'step_fb_ratio' in self.walking_filtered_params:
             gait_param['step_fb_ratio'] = self.walking_filtered_params['step_fb_ratio']
+            applied = True
         
         if config['enable_roll_offset'] and 'init_roll_offset' in self.walking_filtered_params:
             gait_param['init_roll_offset'] = self.walking_filtered_params['init_roll_offset']
+            applied = True
         
         if config['enable_pitch_offset'] and 'init_pitch_offset' in self.walking_filtered_params:
             gait_param['init_pitch_offset'] = self.walking_filtered_params['init_pitch_offset']
+            applied = True
         
         if config['enable_y_offset'] and 'init_y_offset' in self.walking_filtered_params:
             gait_param['init_y_offset'] = self.walking_filtered_params['init_y_offset']
+            applied = True
         
         if config['enable_y_swap'] and 'y_swap_amplitude' in self.walking_filtered_params:
             gait_param['y_swap_amplitude'] = self.walking_filtered_params['y_swap_amplitude']
+            applied = True
         
         if config['enable_z_swap'] and 'z_swap_amplitude' in self.walking_filtered_params:
             gait_param['z_swap_amplitude'] = self.walking_filtered_params['z_swap_amplitude']
+            applied = True
         
         if config['enable_dsp_ratio'] and 'dsp_ratio' in self.walking_filtered_params:
             gait_param['dsp_ratio'] = self.walking_filtered_params['dsp_ratio']
+            applied = True
         
-        self.gait_manager.update_param(
-            period_time,
-            0, 0, 0,
-            gait_param,
-            step_num=0
-        )
-        
-        self.last_walking_update_time = current_time
-        rospy.logdebug(f"AutoStabilization [WALKING]: Corrections applied (change={change_magnitude:.3f} m/s²)")
+        return applied
     
     def _calculate_rest_step_amplitude(self, change_magnitude, config):
         """Вычисляет амплитуду шага стабилизации в покое."""
@@ -523,6 +594,15 @@ class AutoStabilization:
             corrections['dsp_ratio'] = min(base_dsp_ratio + increase_max, corrected_dsp)
         
         return corrections
+    
+    def reset_walking_corrections(self):
+        """
+        Сбрасывает корректировки стабилизации при ходьбе.
+        Вызывается при остановке движения для возврата к базовым параметрам.
+        """
+        # Очищаем отфильтрованные параметры, чтобы вернуться к базовым значениям
+        self.walking_filtered_params = {}
+        self.last_walking_update_time = 0
     
     def reset(self):
         """Сбрасывает состояние стабилизации."""

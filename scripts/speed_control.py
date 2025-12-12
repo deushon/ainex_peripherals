@@ -39,8 +39,18 @@ class SpeedControl:
         self.gait_manager = gait_manager
         self.speed_mode = 1
         self.speed_params = self._setup_speed_parameters()
+        self.auto_stabilization = None  # Будет установлено из joystick_control
         
         rospy.loginfo("SpeedControl module initialized")
+    
+    def set_auto_stabilization(self, auto_stabilization):
+        """
+        Устанавливает ссылку на модуль автостабилизации для применения корректировок при ходьбе.
+        
+        Args:
+            auto_stabilization: Экземпляр AutoStabilization
+        """
+        self.auto_stabilization = auto_stabilization
     
     def _setup_speed_parameters(self):
         """
@@ -165,6 +175,10 @@ class SpeedControl:
         update_param = any(abs(amp) > 0 for amp in [x_move_amplitude, y_move_amplitude, angle_move_amplitude])
         
         if update_param:
+            # Применяем корректировки стабилизации при ходьбе ТОЛЬКО когда есть движение
+            # Это должно быть ПОСЛЕ установки базовых параметров, но ДО set_step
+            if self.auto_stabilization is not None:
+                self.auto_stabilization.apply_walking_corrections(gait_param, period_time)
             # Используем body_height из gait_manager (единый источник истины)
             # Не устанавливаем init_z_offset, так как body_height уже актуален
             
@@ -201,6 +215,18 @@ class SpeedControl:
         
         status = 'move' if update_param else 'stop'
         if status == 'stop':
+            # При остановке сбрасываем корректировки стабилизации при ходьбе
+            if self.auto_stabilization is not None:
+                self.auto_stabilization.reset_walking_corrections()
+            # Возвращаем базовые параметры режима скорости (сбрасываем корректировки)
+            gait_param.update(params.get('gait_base', {}))
+            # Обновляем параметры без движения для сброса корректировок
+            self.gait_manager.update_param(
+                params['period_time'],
+                0, 0, 0,  # Без движения
+                gait_param,
+                step_num=0
+            )
             self.gait_manager.stop()
         
         return x_move_amplitude, y_move_amplitude, angle_move_amplitude, status

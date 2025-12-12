@@ -156,6 +156,8 @@ class JoystickController:
             self.speed_control.get_speed_mode(),
             initial_height
         )
+        # Устанавливаем ссылку на auto_stabilization в speed_control для применения корректировок
+        self.speed_control.set_auto_stabilization(self.auto_stabilization)
         self.button_actions = ButtonActions(
             self.board,
             self.gait_manager,
@@ -190,6 +192,8 @@ class JoystickController:
         self.serial_reader_thread.daemon = True
         self.serial_reader_thread.start()
         rospy.on_shutdown(self.serial_reader_thread.stop)
+        # Гарантируем остановку робота при завершении
+        rospy.on_shutdown(self._shutdown_handler)
         
         # Сервис проверки здоровья
         self.health_service = rospy.Service('/game/robot_health', Trigger, self.health_check_service)
@@ -406,11 +410,35 @@ class JoystickController:
 
         self.last_buttons = buttons
         self.last_axes = axes
+    
+    def _shutdown_handler(self):
+        """Обработчик завершения работы - гарантирует остановку робота."""
+        try:
+            rospy.loginfo("Shutting down joystick controller...")
+            # Останавливаем робота
+            self.gait_manager.stop()
+            # Сбрасываем корректировки стабилизации
+            if hasattr(self, 'auto_stabilization') and self.auto_stabilization is not None:
+                self.auto_stabilization.reset_walking_corrections()
+            rospy.loginfo("Robot stopped on shutdown")
+        except Exception as e:
+            rospy.logerr(f"Error during shutdown: {e}")
 
 if __name__ == "__main__":
+    node = None
     try:
         node = JoystickController()
         rospy.spin()
+    except KeyboardInterrupt:
+        rospy.loginfo("Shutting down...")
     except Exception as e:
         rospy.logerr(f"An error occurred in the main execution block: {str(e)}")
+    finally:
+        # Гарантируем остановку робота при завершении
+        if node is not None:
+            try:
+                node.gait_manager.stop()
+                rospy.loginfo("Robot stopped on shutdown")
+            except:
+                pass
 
