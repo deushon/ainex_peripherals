@@ -7,10 +7,12 @@
 # ========== КОНФИГУРАЦИЯ ==========
 # Обнаружение падений
 FALL_COUNT_THRESHOLD = 50  # Порог счетчика для определения падения
+FALL_COUNT_MAX = 100  # Максимальное значение счетчика (предотвращает переполнение)
 FALL_ACCEL_THRESHOLD = 7.0  # Порог ускорения для падения (м/с²)
 FALL_ANGLE_THRESHOLD = 30.0  # Порог угла для падения (градусы)
 FALL_COUNT_INCREMENT = 1  # Приращение счетчика при падении
 FALL_COUNT_DECREMENT = 2  # Уменьшение счетчика при нормальном состоянии
+FALL_COUNT_DECREMENT_FAST = 5  # Быстрое уменьшение счетчика когда робот встал
 FALL_COUNT_COOLDOWN_DECREMENT = 15  # Уменьшение счетчика в период cooldown
 FALL_CHECK_COOLDOWN_DURATION = 10.0  # Длительность cooldown после подъема (сек)
 
@@ -200,17 +202,20 @@ class IMUHandler:
                 # Логика падения
                 if angle_deg < FALL_ANGLE_THRESHOLD:
                     if az_original > FALL_ACCEL_THRESHOLD:
-                        self.count_lie += FALL_COUNT_INCREMENT
+                        # Ограничиваем максимальное значение счетчика
+                        self.count_lie = min(FALL_COUNT_MAX, self.count_lie + FALL_COUNT_INCREMENT)
                         self.count_recline = max(0, self.count_recline - FALL_COUNT_DECREMENT)
                     elif az_original < -FALL_ACCEL_THRESHOLD:
-                        self.count_recline += FALL_COUNT_INCREMENT
+                        # Ограничиваем максимальное значение счетчика
+                        self.count_recline = min(FALL_COUNT_MAX, self.count_recline + FALL_COUNT_INCREMENT)
                         self.count_lie = max(0, self.count_lie - FALL_COUNT_DECREMENT)
                     else:
                         self.count_lie = max(0, self.count_lie - FALL_COUNT_DECREMENT)
                         self.count_recline = max(0, self.count_recline - FALL_COUNT_DECREMENT)
                 else:
-                    self.count_lie = max(0, self.count_lie - FALL_COUNT_DECREMENT)
-                    self.count_recline = max(0, self.count_recline - FALL_COUNT_DECREMENT)
+                    # Робот стоит - ускоряем сброс счетчиков
+                    self.count_lie = max(0, self.count_lie - FALL_COUNT_DECREMENT_FAST)
+                    self.count_recline = max(0, self.count_recline - FALL_COUNT_DECREMENT_FAST)
             else:
                 # В период cooldown - агрессивно сбрасываем счетчики
                 self.count_lie = max(0, self.count_lie - FALL_COUNT_COOLDOWN_DECREMENT)
