@@ -21,11 +21,11 @@ FALL_DETECTION_CONFIG = {
 
 # Автоматический подъем
 AUTO_GETUP_ENABLED = True  # Включен ли автоматический подъем
-FALL_TIME_THRESHOLD = 3.0  # Время падения для автоматического подъема (сек)
-AUTO_GETUP_INTERVAL = 5.0  # Минимальный интервал между попытками подъема (сек)
+FALL_TIME_THRESHOLD = 2.0  # Время падения для автоматического подъема (сек)
+AUTO_GETUP_INTERVAL = 4.0  # Минимальный интервал между попытками подъема (сек)
 MAX_GETUP_ATTEMPTS = 2  # Максимальное количество попыток подъема
 GETUP_ACTION_TIMEOUT = 10.0  # Таймаут выполнения действия подъема (сек)
-FALL_CHECK_COOLDOWN_DURATION = 10.0  # Длительность cooldown после подъема (сек)
+FALL_CHECK_COOLDOWN_DURATION = 5.0  # Длительность cooldown после подъема (сек)
 
 # ===================================
 

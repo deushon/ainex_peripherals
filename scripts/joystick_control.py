@@ -302,7 +302,9 @@ class JoystickController:
                 self.motion_manager,
                 self.game_services.can_move,
                 'lie_to_stand',
-                'recline_to_stand'
+                'BACK_UP',
+                'LEFT_UP',
+                'RIGHT_UP'
             )
 
     def axes_callback(self, axes):
