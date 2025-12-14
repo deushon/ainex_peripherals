@@ -52,6 +52,14 @@ REST_STABILIZATION_CONFIG = {
         'pitch': 0.3,  # Порог угловой скорости по pitch (рад/с)
         'yaw': 0.5,    # Порог угловой скорости по yaw (рад/с)
     },
+    'oscillation_detection': {  # Обнаружение качания (осцилляции)
+        'enabled': True,  # Включить/выключить обнаружение качания
+        'direction_change_threshold': 0.5,  # Если направление угловой скорости меняется чаще чем раз в X секунд - это качание
+        'min_velocity_for_oscillation': 0.1,  # Минимальная угловая скорость для учета изменения направления (рад/с)
+    },
+    
+    # Cooldown после стабилизации
+    'cooldown_after_stabilization': 1.0,  # Время после стабилизации, когда новая стабилизация не активируется (сек)
     
     # Параметры для gait_manager при стабилизации (отдельные от джойстика)
     'gait_params': {
@@ -127,6 +135,12 @@ class AutoStabilization:
             'movement_history': [],  # История перемещений для возврата [{'x': x, 'y': y, 'angle': a, 'time': t}, ...]
             'return_pending': False,  # Ожидается ли возврат
             'return_start_time': None,  # Время начала возврата
+            'cooldown_until': 0,  # Время до которого стабилизация не активируется (cooldown)
+            'angular_velocity_history': {  # История угловой скорости для обнаружения качания
+                'roll': [],  # [(velocity, time, direction), ...]
+                'pitch': [],
+                'yaw': []
+            },
         }
         
         # Инициализация эталона
@@ -253,11 +267,30 @@ class AutoStabilization:
         if not state['reference_set']:
             return False  # Ждем установки эталона
         
+        # Проверяем cooldown - если недавно была стабилизация, не активируем новую
+        if current_time < state['cooldown_until']:
+            return False  # В режиме cooldown
+        
         # Вычисляем отклонения от эталона
         ref = state['reference']
         roll_dev = roll_deg - ref['roll']
         pitch_dev = pitch_deg - ref['pitch']
         yaw_dev = yaw_deg - ref['yaw']
+        
+        # Обновляем историю угловой скорости для обнаружения качания
+        oscillation_detected = False
+        if config.get('oscillation_detection', {}).get('enabled', True):
+            oscillation_detected = self._check_oscillation(roll_vel, pitch_vel, yaw_vel, current_time, config)
+            if oscillation_detected and state['stabilization_active']:
+                # Обнаружено качание - прекращаем стабилизацию
+                rospy.logwarn("🔄 Oscillation detected - stopping stabilization to prevent extra steps")
+                try:
+                    self.gait_manager.stop()
+                except Exception as e:
+                    rospy.logwarn(f"Error stopping gait_manager: {e}")
+                state['stabilization_active'] = False
+                state['cooldown_until'] = current_time + config.get('cooldown_after_stabilization', 1.0)
+                return False
         
         # Проверяем, вышли ли за критические углы (с учетом включения/выключения осей)
         critical = config['critical_angles']
@@ -278,19 +311,24 @@ class AutoStabilization:
             yaw_critical = critical['yaw']['left'] if yaw_dev > 0 else critical['yaw']['right']
             yaw_exceeded = abs(yaw_dev) > yaw_critical
         
-        # Проверяем угловую скорость (для быстрой реакции)
+        # Проверяем угловую скорость (для быстрой реакции, только если не качание)
         velocity_exceeded = False
-        if config.get('angular_velocity_enabled', True):
+        if config.get('angular_velocity_enabled', True) and not oscillation_detected:
             vel_thresholds = config.get('angular_velocity_thresholds', {})
+            # Активируем только если угловая скорость в одном направлении (не качание)
             if enabled['roll'] and abs(roll_vel) > vel_thresholds.get('roll', 0.3):
-                velocity_exceeded = True
-                rospy.logwarn(f"⚡ High angular velocity detected: roll_vel={roll_vel:.3f} rad/s (threshold: {vel_thresholds.get('roll', 0.3)})")
+                # Проверяем, что скорость в одном направлении (не меняется знак)
+                if self._is_velocity_consistent('roll', roll_vel, current_time, config):
+                    velocity_exceeded = True
+                    rospy.logwarn(f"⚡ High angular velocity (consistent): roll_vel={roll_vel:.3f} rad/s")
             if enabled['pitch'] and abs(pitch_vel) > vel_thresholds.get('pitch', 0.3):
-                velocity_exceeded = True
-                rospy.logwarn(f"⚡ High angular velocity detected: pitch_vel={pitch_vel:.3f} rad/s (threshold: {vel_thresholds.get('pitch', 0.3)})")
+                if self._is_velocity_consistent('pitch', pitch_vel, current_time, config):
+                    velocity_exceeded = True
+                    rospy.logwarn(f"⚡ High angular velocity (consistent): pitch_vel={pitch_vel:.3f} rad/s")
             if enabled['yaw'] and abs(yaw_vel) > vel_thresholds.get('yaw', 0.5):
-                velocity_exceeded = True
-                rospy.logwarn(f"⚡ High angular velocity detected: yaw_vel={yaw_vel:.3f} rad/s (threshold: {vel_thresholds.get('yaw', 0.5)})")
+                if self._is_velocity_consistent('yaw', yaw_vel, current_time, config):
+                    velocity_exceeded = True
+                    rospy.logwarn(f"⚡ High angular velocity (consistent): yaw_vel={yaw_vel:.3f} rad/s")
         
         needs_stabilization = roll_exceeded or pitch_exceeded or yaw_exceeded or velocity_exceeded
         
@@ -305,7 +343,7 @@ class AutoStabilization:
                 return self._execute_return()
         
         # Проверяем стабильность (только по включенным осям)
-        # Также проверяем угловую скорость - если она высокая, робот еще нестабилен
+        # НЕ учитываем угловую скорость для продолжения стабилизации - если углы стабильны, останавливаемся
         stable = config['stable_threshold']
         is_stable = True
         if enabled['roll']:
@@ -314,16 +352,6 @@ class AutoStabilization:
             is_stable = is_stable and abs(pitch_dev) < stable['pitch']
         if enabled['yaw']:
             is_stable = is_stable and abs(yaw_dev) < stable['yaw']
-        
-        # Если угловая скорость высокая, робот еще нестабилен (даже если углы в норме)
-        if config.get('angular_velocity_enabled', True):
-            vel_thresholds = config.get('angular_velocity_thresholds', {})
-            if enabled['roll'] and abs(roll_vel) > vel_thresholds.get('roll', 0.3):
-                is_stable = False
-            if enabled['pitch'] and abs(pitch_vel) > vel_thresholds.get('pitch', 0.3):
-                is_stable = False
-            if enabled['yaw'] and abs(yaw_vel) > vel_thresholds.get('yaw', 0.5):
-                is_stable = False
         
         if needs_stabilization:
             # Активируем стабилизацию
@@ -355,6 +383,10 @@ class AutoStabilization:
             except Exception as e:
                 rospy.logwarn(f"Error stopping gait_manager: {e}")
             state['stabilization_active'] = False
+            # Устанавливаем cooldown после стабилизации
+            state['cooldown_until'] = current_time + config.get('cooldown_after_stabilization', 1.0)
+            # Очищаем историю угловой скорости
+            state['angular_velocity_history'] = {'roll': [], 'pitch': [], 'yaw': []}
             
             if config['return_enabled'] and len(state['movement_history']) > 0:
                 state['return_pending'] = True
@@ -800,6 +832,105 @@ class AutoStabilization:
         except Exception as e:
             rospy.logerr(f"Error executing YAW stabilization step: {e}")
     
+    def _check_oscillation(self, roll_vel, pitch_vel, yaw_vel, current_time, config):
+        """
+        Проверяет, есть ли качание (осцилляция) по угловой скорости.
+        
+        Args:
+            roll_vel: Угловая скорость по roll (рад/с)
+            pitch_vel: Угловая скорость по pitch (рад/с)
+            yaw_vel: Угловая скорость по yaw (рад/с)
+            current_time: Текущее время
+            config: Конфигурация
+        
+        Returns:
+            bool: True если обнаружено качание
+        """
+        osc_config = config.get('oscillation_detection', {})
+        if not osc_config.get('enabled', True):
+            return False
+        
+        threshold = osc_config.get('direction_change_threshold', 0.5)
+        min_vel = osc_config.get('min_velocity_for_oscillation', 0.1)
+        state = self.rest_stabilization_state
+        enabled = config['stabilization_enabled']
+        
+        # Проверяем каждую ось
+        for axis, vel, axis_name in [('roll', roll_vel, 'roll'), ('pitch', pitch_vel, 'pitch'), ('yaw', yaw_vel, 'yaw')]:
+            if not enabled[axis]:
+                continue
+            
+            if abs(vel) < min_vel:
+                continue  # Скорость слишком мала для учета
+            
+            history = state['angular_velocity_history'][axis]
+            direction = 1 if vel > 0 else -1
+            
+            # Добавляем текущее значение
+            history.append({
+                'velocity': vel,
+                'direction': direction,
+                'time': current_time
+            })
+            
+            # Ограничиваем размер истории (последние 20 записей)
+            if len(history) > 20:
+                history.pop(0)
+            
+            # Проверяем, как часто меняется направление
+            if len(history) >= 3:
+                # Считаем изменения направления за последние записи
+                direction_changes = 0
+                for i in range(1, len(history)):
+                    if history[i]['direction'] != history[i-1]['direction']:
+                        direction_changes += 1
+                
+                # Если направление меняется часто - это качание
+                if direction_changes >= 2:
+                    time_span = history[-1]['time'] - history[0]['time']
+                    if time_span > 0 and direction_changes / time_span > 1.0 / threshold:
+                        rospy.logwarn(f"🔄 Oscillation detected on {axis_name}: {direction_changes} direction changes in {time_span:.2f}s")
+                        return True
+        
+        return False
+    
+    def _is_velocity_consistent(self, axis, velocity, current_time, config):
+        """
+        Проверяет, что угловая скорость в одном направлении (не меняется знак).
+        
+        Args:
+            axis: Ось ('roll', 'pitch', 'yaw')
+            velocity: Текущая угловая скорость (рад/с)
+            current_time: Текущее время
+            config: Конфигурация
+        
+        Returns:
+            bool: True если скорость в одном направлении
+        """
+        osc_config = config.get('oscillation_detection', {})
+        min_vel = osc_config.get('min_velocity_for_oscillation', 0.1)
+        
+        if abs(velocity) < min_vel:
+            return False  # Скорость слишком мала
+        
+        state = self.rest_stabilization_state
+        history = state['angular_velocity_history'][axis]
+        current_direction = 1 if velocity > 0 else -1
+        
+        # Если история пуста или последнее направление совпадает - скорость согласована
+        if len(history) == 0:
+            return True
+        
+        # Проверяем последние несколько записей
+        recent_count = min(3, len(history))
+        consistent = True
+        for i in range(-recent_count, 0):
+            if history[i]['direction'] != current_direction:
+                consistent = False
+                break
+        
+        return consistent
+    
     def _reset_rest_stabilization_state(self):
         """Сбрасывает состояние стабилизации в покое."""
         state = self.rest_stabilization_state
@@ -808,6 +939,8 @@ class AutoStabilization:
         state['return_start_time'] = None
         state['movement_history'] = []
         state['last_update_time'] = 0
+        state['cooldown_until'] = 0
+        state['angular_velocity_history'] = {'roll': [], 'pitch': [], 'yaw': []}
     
     def _process_walking_stabilization(self, imu_data):
         """
