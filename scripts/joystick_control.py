@@ -286,13 +286,9 @@ class JoystickController:
         
         # Обновление автостабилизации
         if self.auto_stabilization.enabled and self.imu_handler.get_robot_state() == 'stand':
-            # Обновляем калибровку в auto_stabilization
-            self.auto_stabilization.update_calibration(imu_data['ax'], imu_data['ay'])
-            
-            # Обрабатываем стабилизацию
+            # Обрабатываем стабилизацию с новыми данными IMU
             self.auto_stabilization.process(
-                imu_data['ax'],
-                imu_data['ay'],
+                imu_data,
                 self.imu_handler.get_robot_state(),
                 self.status,
                 self.x_move_amplitude,
@@ -308,8 +304,6 @@ class JoystickController:
                 'lie_to_stand',
                 'recline_to_stand'
             )
-        
-        # Проверка резонанса (будет использован при следующем вызове process_axes)
 
     def axes_callback(self, axes):
         """Обработчик осей джойстика."""
@@ -331,23 +325,17 @@ class JoystickController:
         if abs(self.auto_stabilization.init_z_offset - current_height) > 0.001:
             self.auto_stabilization.init_z_offset = current_height
         
-        # Получаем фактор адаптации от IMU handler
-        adaptation_factor = self.imu_handler.check_resonance(self.status)
-        
         # Обрабатываем оси через speed_control (высота берется из gait_manager)
+        # Фактор адаптации резонанса удален - больше не используется
         x_move_amp, y_move_amp, angle_move_amp, status = self.speed_control.process_axes(
             axes,
-            adaptation_factor
+            1.0  # Фактор адаптации всегда 1.0 (резонанс больше не обрабатывается)
         )
         
         self.x_move_amplitude = x_move_amp
         self.y_move_amplitude = y_move_amp
         self.angle_move_amplitude = angle_move_amp
         self.status = status
-        
-        # Сбрасываем адаптацию при остановке
-        if self.status == 'stop':
-            self.imu_handler.reset_adaptation()
     
     def _update_height_in_all_modules(self, height):
         """

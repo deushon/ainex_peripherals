@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 """
-Модуль обработки данных IMU: обнаружение падений, калибровка, резонанс.
+Модуль обработки данных IMU: обнаружение падений через ориентацию.
 """
 
-# ========== КОНФИГУРАЦИЯ ==========
-# Обнаружение падений
-FALL_COUNT_THRESHOLD = 50  # Порог счетчика для определения падения
-FALL_COUNT_MAX = 100  # Максимальное значение счетчика (предотвращает переполнение)
-FALL_ACCEL_THRESHOLD = 7.0  # Порог ускорения для падения (м/с²)
-FALL_ANGLE_THRESHOLD = 30.0  # Порог угла для падения (градусы)
-FALL_COUNT_INCREMENT = 1  # Приращение счетчика при падении
-FALL_COUNT_DECREMENT = 2  # Уменьшение счетчика при нормальном состоянии
-FALL_COUNT_DECREMENT_FAST = 5  # Быстрое уменьшение счетчика когда робот встал
-FALL_COUNT_COOLDOWN_DECREMENT = 15  # Уменьшение счетчика в период cooldown
-FALL_CHECK_COOLDOWN_DURATION = 10.0  # Длительность cooldown после подъема (сек)
+# ========== КОНФИГУРАЦИЯ ОБНАРУЖЕНИЯ ПАДЕНИЙ ==========
+FALL_DETECTION_CONFIG = {
+    # Критические углы по каждой оси (в градусах)
+    'critical_angle_roll': 45.0,   # Критический угол крена (наклон влево/вправо)
+    'critical_angle_pitch': 45.0,  # Критический угол тангажа (наклон вперед/назад)
+    
+    # Время, в течение которого робот должен быть под критическим углом (сек)
+    'critical_angle_duration': 0.5,
+    
+    # Опциональная проверка покоя (изменения ускорений ниже порога)
+    'check_rest_enabled': True,   # Включить проверку покоя
+    'rest_accel_threshold': 0.5,  # Порог изменения ускорения для определения покоя (м/с²)
+    'rest_check_duration': 0.3,   # Время для проверки покоя (сек)
+}
 
 # Автоматический подъем
 AUTO_GETUP_ENABLED = True  # Включен ли автоматический подъем
@@ -22,67 +25,45 @@ FALL_TIME_THRESHOLD = 3.0  # Время падения для автоматич
 AUTO_GETUP_INTERVAL = 5.0  # Минимальный интервал между попытками подъема (сек)
 MAX_GETUP_ATTEMPTS = 2  # Максимальное количество попыток подъема
 GETUP_ACTION_TIMEOUT = 10.0  # Таймаут выполнения действия подъема (сек)
+FALL_CHECK_COOLDOWN_DURATION = 10.0  # Длительность cooldown после подъема (сек)
 
-# Обнаружение резонанса
-RESONANCE_DETECTION_ENABLED = True  # Включено ли обнаружение резонанса
-MAX_SAFE_AMPLITUDE = 0.3  # Максимальная безопасная амплитуда качания (м/с²)
-CRITICAL_AMPLITUDE = 0.5  # Критическая амплитуда (м/с²)
-RESONANCE_ADAPTATION_STEP = 0.05  # Шаг изменения фактора адаптации
-RESONANCE_MIN_FACTOR = 0.5  # Минимальный фактор адаптации
-RESONANCE_REDUCTION_RATIO = 0.4  # Коэффициент уменьшения при резонансе
-RESONANCE_PITCH_MULTIPLIER = 2.0  # Множитель для амплитуды pitch
-RESONANCE_HISTORY_MIN = 10  # Минимальный размер истории для анализа резонанса
-
-# История IMU данных
-IMU_HISTORY_SIZE = 50  # Размер истории IMU данных
-
-# Логирование
-LOG_INTERVAL = 2.0  # Интервал логирования (сек)
 # ===================================
 
 import rospy
 import math
 import threading
-import numpy as np
 from sensor_msgs.msg import Imu
-
-
-# Матрица преобразования осей (как в imu_visualizer.py)
-AXIS_TRANSFORM_MATRIX = np.array([
-    [-1.0, 0.0, 0.0],
-    [0.0, 0.0, -1.0],
-    [0.0, -1.0, 0.0],
-])
-
-
-def transform_axes_vector(vec):
-    """Преобразование вектора согласно матрице преобразования осей"""
-    return AXIS_TRANSFORM_MATRIX.dot(vec)
 
 
 class IMUHandler:
     """
-    Класс для обработки данных IMU: обнаружение падений, калибровка.
+    Класс для обработки данных IMU: обнаружение падений через ориентацию.
     """
     
     def __init__(self):
         """Инициализация обработчика IMU."""
+        self.fall_config = FALL_DETECTION_CONFIG.copy()
+        
         # Состояние робота
         self.robot_state = 'stand'
-        self.count_lie = 0
-        self.count_recline = 0
         self.fall_check_cooldown = 0
         
-        # История IMU данных для анализа резонанса
-        self.imu_history_size = IMU_HISTORY_SIZE
-        self.imu_history = {
-            'ax': [],
-            'ay': [],
-            'az': [],
+        # История ориентации для определения падения
+        self.orientation_history = {
             'roll': [],
-            'pitch': [],
-            'yaw': []
+            'pitch': []
         }
+        
+        # История ускорений для проверки покоя
+        self.accel_history = {
+            'x': [],
+            'y': [],
+            'z': []
+        }
+        
+        # Время начала критического угла
+        self.critical_angle_start_time = None
+        self.critical_angle_axis = None
         
         # Параметры для автоматического подъема
         self.auto_getup_enabled = AUTO_GETUP_ENABLED
@@ -94,21 +75,19 @@ class IMUHandler:
         self.getup_attempt_count = 0
         self.max_getup_attempts = MAX_GETUP_ATTEMPTS
         
-        # Параметры для обнаружения резонанса
-        self.resonance_detection_enabled = RESONANCE_DETECTION_ENABLED
-        self.max_safe_amplitude = MAX_SAFE_AMPLITUDE
-        self.critical_amplitude = CRITICAL_AMPLITUDE
-        self.current_adaptation_factor = 1.0
-        
         # Блокировка для thread-safe доступа
         self.imu_lock = threading.Lock()
         
         # Логирование
-        self.last_log_time = 0
-        self.log_interval = LOG_INTERVAL
         self.imu_data_received = False
         
+        # Хранение RAW данных IMU для вывода при падении
+        self.last_raw_data = None
+        self.last_processed_data = None
+        self.fall_data_logged = False  # Флаг для однократного вывода данных при падении
+        
         rospy.loginfo("IMUHandler module initialized")
+        rospy.loginfo(f"  Fall detection config: {self.fall_config}")
     
     def process_imu(self, msg: Imu):
         """
@@ -122,141 +101,138 @@ class IMUHandler:
         """
         try:
             with self.imu_lock:
-                # Получаем сырые данные
-                accel_raw = np.array([
-                    msg.linear_acceleration.x,
-                    msg.linear_acceleration.y,
-                    msg.linear_acceleration.z
-                ])
+                # Получаем сырые данные из IMU
+                qx_raw = msg.orientation.x
+                qy_raw = msg.orientation.y
+                qz_raw = msg.orientation.z
+                qw_raw = msg.orientation.w
                 
-                # Сохраняем исходные значения для логики падения
-                ay_original = msg.linear_acceleration.y
-                az_original = msg.linear_acceleration.z
+                # Используем quaternion как есть
+                qx, qy, qz, qw = qx_raw, qy_raw, qz_raw, qw_raw
                 
-                # Применяем преобразование осей
-                accel_transformed = transform_axes_vector(accel_raw)
-                ax = accel_transformed[0]
-                ay = accel_transformed[1]
-                az = accel_transformed[2]
-                
-                # Гироскоп тоже преобразуем
-                gyro_raw = np.array([
-                    msg.angular_velocity.x,
-                    msg.angular_velocity.y,
-                    msg.angular_velocity.z
-                ])
-                gyro_transformed = transform_axes_vector(gyro_raw)
-                gx = gyro_transformed[0]
-                gy = gyro_transformed[1]
-                gz = gyro_transformed[2]
-                
-                # Извлечение углов ориентации из quaternion
-                qx = msg.orientation.x
-                qy = msg.orientation.y
-                qz = msg.orientation.z
-                qw = msg.orientation.w
-                
-                # Преобразование quaternion в углы Эйлера
+                # Преобразование quaternion в углы Эйлера (в радианах)
                 sinr_cosp = 2 * (qw * qx + qy * qz)
                 cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
-                roll = math.atan2(sinr_cosp, cosr_cosp)
+                roll_raw = math.atan2(sinr_cosp, cosr_cosp)
                 
                 sinp = 2 * (qw * qy - qz * qx)
                 if abs(sinp) >= 1:
-                    pitch = math.copysign(math.pi / 2, sinp)
+                    pitch_raw = math.copysign(math.pi / 2, sinp)
                 else:
-                    pitch = math.asin(sinp)
+                    pitch_raw = math.asin(sinp)
                 
                 siny_cosp = 2 * (qw * qz + qx * qy)
                 cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
                 yaw = math.atan2(siny_cosp, cosy_cosp)
                 
-                # Обновление истории IMU данных
-                self.imu_history['ax'].append(ax)
-                self.imu_history['ay'].append(ay)
-                self.imu_history['az'].append(az)
-                self.imu_history['roll'].append(roll)
-                self.imu_history['pitch'].append(pitch)
-                self.imu_history['yaw'].append(yaw)
+                # МЕНЯЕМ МЕСТАМИ ROLL И PITCH (так как X и Y переставлены)
+                roll = pitch_raw  # roll теперь из pitch
+                pitch = roll_raw  # pitch теперь из roll
                 
-                # Ограничение размера истории
-                for key in self.imu_history:
-                    if len(self.imu_history[key]) > self.imu_history_size:
-                        self.imu_history[key].pop(0)
+                # Конвертируем в градусы для удобства
+                roll_deg = math.degrees(roll)
+                pitch_deg = math.degrees(pitch)
+                yaw_deg = math.degrees(yaw)
+                
+                # Получаем угловую скорость
+                gx_raw = msg.angular_velocity.x
+                gy_raw = msg.angular_velocity.y
+                gz_raw = msg.angular_velocity.z
+                
+                # МЕНЯЕМ МЕСТАМИ X И Y для угловой скорости
+                gx = gy_raw  # gx теперь из gy
+                gy = gx_raw  # gy теперь из gx
+                gz = gz_raw  # gz остается как есть
+                
+                # Получаем линейное ускорение
+                ax_raw = msg.linear_acceleration.x
+                ay_raw = msg.linear_acceleration.y
+                az_raw = msg.linear_acceleration.z
+                
+                # МЕНЯЕМ МЕСТАМИ X И Y для линейного ускорения
+                ax = ay_raw  # ax теперь из ay
+                ay = ax_raw  # ay теперь из ax
+                az = az_raw  # az остается как есть
+                
+                # Сохраняем RAW данные для вывода при падении
+                self.last_raw_data = {
+                    'orientation': {
+                        'x': qx_raw,
+                        'y': qy_raw,
+                        'z': qz_raw,
+                        'w': qw_raw
+                    },
+                    'angular_velocity': {
+                        'x': gx_raw,
+                        'y': gy_raw,
+                        'z': gz_raw
+                    },
+                    'linear_acceleration': {
+                        'x': ax_raw,
+                        'y': ay_raw,
+                        'z': az_raw
+                    }
+                }
+                
+                # Сохраняем обработанные данные для вывода при падении
+                self.last_processed_data = {
+                    'orientation': {
+                        'x': qx,
+                        'y': qy,
+                        'z': qz,
+                        'w': qw,
+                        'roll': roll,
+                        'pitch': pitch,
+                        'yaw': yaw,
+                        'roll_deg': roll_deg,
+                        'pitch_deg': pitch_deg,
+                        'yaw_deg': yaw_deg
+                    },
+                    'angular_velocity': {
+                        'x': gx,
+                        'y': gy,
+                        'z': gz
+                    },
+                    'linear_acceleration': {
+                        'x': ax,
+                        'y': ay,
+                        'z': az
+                    }
+                }
                 
                 # Логирование первого получения IMU данных
                 if not self.imu_data_received:
                     self.imu_data_received = True
                     rospy.loginfo("✅ IMU data received!")
             
-            # Обработка падения (используем исходные значения)
+            # Обработка падения через ориентацию
             current_time = rospy.get_time()
-            
-            if current_time >= self.fall_check_cooldown:
-                if abs(az_original) > 1e-6:
-                    angle_rad = math.atan2(abs(ay_original), abs(az_original))
-                    angle_deg = math.degrees(angle_rad)
-                else:
-                    angle_deg = 90.0
-                
-                # Логика падения
-                if angle_deg < FALL_ANGLE_THRESHOLD:
-                    if az_original > FALL_ACCEL_THRESHOLD:
-                        # Ограничиваем максимальное значение счетчика
-                        self.count_lie = min(FALL_COUNT_MAX, self.count_lie + FALL_COUNT_INCREMENT)
-                        self.count_recline = max(0, self.count_recline - FALL_COUNT_DECREMENT)
-                    elif az_original < -FALL_ACCEL_THRESHOLD:
-                        # Ограничиваем максимальное значение счетчика
-                        self.count_recline = min(FALL_COUNT_MAX, self.count_recline + FALL_COUNT_INCREMENT)
-                        self.count_lie = max(0, self.count_lie - FALL_COUNT_DECREMENT)
-                    else:
-                        self.count_lie = max(0, self.count_lie - FALL_COUNT_DECREMENT)
-                        self.count_recline = max(0, self.count_recline - FALL_COUNT_DECREMENT)
-                else:
-                    # Робот стоит - ускоряем сброс счетчиков
-                    self.count_lie = max(0, self.count_lie - FALL_COUNT_DECREMENT_FAST)
-                    self.count_recline = max(0, self.count_recline - FALL_COUNT_DECREMENT_FAST)
-            else:
-                # В период cooldown - агрессивно сбрасываем счетчики
-                self.count_lie = max(0, self.count_lie - FALL_COUNT_COOLDOWN_DECREMENT)
-                self.count_recline = max(0, self.count_recline - FALL_COUNT_COOLDOWN_DECREMENT)
-            
-            old_state = self.robot_state
-            
-            if self.count_lie > FALL_COUNT_THRESHOLD:
-                self.robot_state = 'lie_to_stand'
-            elif self.count_recline > FALL_COUNT_THRESHOLD:
-                self.robot_state = 'recline_to_stand'
-            else:
-                self.robot_state = 'stand'
-            
-            if old_state != self.robot_state:
-                rospy.loginfo(f"🔄 IMU detected robot state change: '{old_state}' -> '{self.robot_state}'")
-                if self.robot_state != 'stand' and old_state == 'stand':
-                    if self.fall_start_time is None:
-                        self.fall_start_time = current_time
-                        rospy.logwarn(f"⚠️ Robot fell! State: {self.robot_state}")
-                elif self.robot_state == 'stand' and old_state != 'stand':
-                    self.fall_start_time = None
-                    self.last_auto_getup_time = 0
-                    self.getup_action_in_progress = False
-                    self.getup_attempt_count = 0
-                    self.count_lie = 0
-                    self.count_recline = 0
-                    self.fall_check_cooldown = current_time + FALL_CHECK_COOLDOWN_DURATION
-                    rospy.loginfo(f"✅ Robot recovered to stand position")
+            self._update_fall_detection(roll_deg, pitch_deg, ax, ay, az, current_time)
             
             # Возвращаем обработанные данные
             return {
-                'ax': ax,
-                'ay': ay,
-                'az': az,
-                'gx': gx,
-                'gy': gy,
-                'gz': gz,
-                'roll': roll,
-                'pitch': pitch,
-                'yaw': yaw,
+                'orientation': {
+                    'x': qx,
+                    'y': qy,
+                    'z': qz,
+                    'w': qw,
+                    'roll': roll,
+                    'pitch': pitch,
+                    'yaw': yaw,
+                    'roll_deg': roll_deg,
+                    'pitch_deg': pitch_deg,
+                    'yaw_deg': yaw_deg,
+                },
+                'angular_velocity': {
+                    'x': gx,
+                    'y': gy,
+                    'z': gz,
+                },
+                'linear_acceleration': {
+                    'x': ax,
+                    'y': ay,
+                    'z': az,
+                },
                 'robot_state': self.robot_state,
                 'fall_detected': self.robot_state != 'stand'
             }
@@ -265,15 +241,217 @@ class IMUHandler:
             rospy.logwarn(f"Error processing IMU data: {e}")
             return None
     
-    def check_auto_getup(self, motion_manager, can_move_func, lie_action, recline_action):
+    def _update_fall_detection(self, roll_deg, pitch_deg, ax, ay, az, current_time):
+        """
+        Обновляет логику обнаружения падения на основе ориентации.
+        
+        Args:
+            roll_deg: Угол крена в градусах
+            pitch_deg: Угол тангажа в градусах
+            ax, ay, az: Линейные ускорения
+            current_time: Текущее время
+        """
+        # Проверяем cooldown
+        if current_time < self.fall_check_cooldown:
+            return
+        
+        # Добавляем текущие значения в историю
+        self.orientation_history['roll'].append(roll_deg)
+        self.orientation_history['pitch'].append(pitch_deg)
+        self.accel_history['x'].append(ax)
+        self.accel_history['y'].append(ay)
+        self.accel_history['z'].append(az)
+        
+        # Ограничиваем размер истории
+        max_history_size = 100
+        for key in self.orientation_history:
+            if len(self.orientation_history[key]) > max_history_size:
+                self.orientation_history[key].pop(0)
+        for key in self.accel_history:
+            if len(self.accel_history[key]) > max_history_size:
+                self.accel_history[key].pop(0)
+        
+        # Проверяем критические углы (yaw не проверяем)
+        critical_roll = self.fall_config['critical_angle_roll']
+        critical_pitch = self.fall_config['critical_angle_pitch']
+        
+        # Roll: нормальное положение около 0°, падение при отклонении
+        roll_exceeded = abs(roll_deg) > critical_roll
+        
+        # Pitch: нормальное положение около 90°, падение при отклонении к 0° или 180°
+        # Проверяем отклонение от 90°
+        pitch_deviation_from_90 = abs(pitch_deg - 90.0)
+        # Если отклонение больше критического угла, значит pitch вышел за допустимые пределы
+        pitch_exceeded = pitch_deviation_from_90 > critical_pitch
+        
+        critical_angle_exceeded = roll_exceeded or pitch_exceeded
+        
+        # Определяем, какая ось превышена
+        exceeded_axis = None
+        if roll_exceeded:
+            exceeded_axis = 'roll'
+        elif pitch_exceeded:
+            exceeded_axis = 'pitch'
+        
+        # Проверяем условие покоя (если включено)
+        is_at_rest = True
+        if self.fall_config['check_rest_enabled']:
+            is_at_rest = self._check_robot_at_rest()
+        
+        # Обновляем время начала критического угла
+        if critical_angle_exceeded and is_at_rest:
+            if self.critical_angle_start_time is None:
+                self.critical_angle_start_time = current_time
+                self.critical_angle_axis = exceeded_axis
+            elif self.critical_angle_axis != exceeded_axis:
+                # Изменилась ось критического угла - сбрасываем таймер
+                self.critical_angle_start_time = current_time
+                self.critical_angle_axis = exceeded_axis
+        else:
+            # Угол не критичен или робот не в покое - сбрасываем таймер
+            self.critical_angle_start_time = None
+            self.critical_angle_axis = None
+        
+        # Проверяем, прошло ли достаточно времени под критическим углом
+        old_state = self.robot_state
+        if (critical_angle_exceeded and 
+            is_at_rest and 
+            self.critical_angle_start_time is not None and
+            (current_time - self.critical_angle_start_time) >= self.fall_config['critical_angle_duration']):
+            
+            # Определяем тип падения на основе оси и направления
+            if exceeded_axis == 'roll':
+                if roll_deg > 0:
+                    self.robot_state = 'fall_left'   # Упал влево
+                else:
+                    self.robot_state = 'fall_right'  # Упал вправо
+            elif exceeded_axis == 'pitch':
+                # Pitch: нормальное положение около 90°
+                # Падение вперед: pitch близок к 0° (или 360°)
+                # Падение назад: pitch близок к 180°
+                # Нормализуем угол к диапазону [0, 360)
+                pitch_normalized = pitch_deg % 360
+                if pitch_normalized < 0:
+                    pitch_normalized += 360
+                
+                # Определяем направление падения:
+                # Если pitch в диапазоне [0, 90) или (270, 360), то ближе к 0° → fall_forward
+                # Если pitch в диапазоне (90, 270], то ближе к 180° → fall_backward
+                if (pitch_normalized >= 0 and pitch_normalized < 90) or (pitch_normalized > 270 and pitch_normalized < 360):
+                    self.robot_state = 'fall_forward'   # Упал вперед (ближе к 0°)
+                else:
+                    self.robot_state = 'fall_backward'  # Упал назад (ближе к 180°)
+        else:
+            # Робот не под критическим углом достаточно долго
+            self.robot_state = 'stand'
+        
+        # Логируем изменение состояния
+        if old_state != self.robot_state:
+            rospy.loginfo(f"🔄 IMU detected robot state change: '{old_state}' -> '{self.robot_state}'")
+            if self.robot_state != 'stand' and old_state == 'stand':
+                if self.fall_start_time is None:
+                    self.fall_start_time = current_time
+                    rospy.logwarn(f"⚠️ Robot fell! State: {self.robot_state}, Axis: {exceeded_axis}")
+                    
+                    # Выводим RAW данные IMU и рассчитанные значения один раз при детекции падения
+                    if self.last_raw_data is not None and self.last_processed_data is not None:
+                        rospy.logwarn("=" * 80)
+                        rospy.logwarn("📊 IMU DATA AT FALL DETECTION:")
+                        rospy.logwarn("=" * 80)
+                        rospy.logwarn("RAW IMU DATA:")
+                        rospy.logwarn(f"  Orientation (quaternion):")
+                        rospy.logwarn(f"    x: {self.last_raw_data['orientation']['x']:.6f}")
+                        rospy.logwarn(f"    y: {self.last_raw_data['orientation']['y']:.6f}")
+                        rospy.logwarn(f"    z: {self.last_raw_data['orientation']['z']:.6f}")
+                        rospy.logwarn(f"    w: {self.last_raw_data['orientation']['w']:.6f}")
+                        rospy.logwarn(f"  Angular velocity (rad/s):")
+                        rospy.logwarn(f"    x: {self.last_raw_data['angular_velocity']['x']:.6f}")
+                        rospy.logwarn(f"    y: {self.last_raw_data['angular_velocity']['y']:.6f}")
+                        rospy.logwarn(f"    z: {self.last_raw_data['angular_velocity']['z']:.6f}")
+                        rospy.logwarn(f"  Linear acceleration (m/s²):")
+                        rospy.logwarn(f"    x: {self.last_raw_data['linear_acceleration']['x']:.6f}")
+                        rospy.logwarn(f"    y: {self.last_raw_data['linear_acceleration']['y']:.6f}")
+                        rospy.logwarn(f"    z: {self.last_raw_data['linear_acceleration']['z']:.6f}")
+                        rospy.logwarn("")
+                        rospy.logwarn("PROCESSED DATA (after x/y swap):")
+                        rospy.logwarn(f"  Orientation (quaternion):")
+                        rospy.logwarn(f"    x: {self.last_processed_data['orientation']['x']:.6f}")
+                        rospy.logwarn(f"    y: {self.last_processed_data['orientation']['y']:.6f}")
+                        rospy.logwarn(f"    z: {self.last_processed_data['orientation']['z']:.6f}")
+                        rospy.logwarn(f"    w: {self.last_processed_data['orientation']['w']:.6f}")
+                        rospy.logwarn(f"  Euler angles:")
+                        rospy.logwarn(f"    roll:  {self.last_processed_data['orientation']['roll_deg']:.2f}° ({self.last_processed_data['orientation']['roll']:.6f} rad)")
+                        rospy.logwarn(f"    pitch: {self.last_processed_data['orientation']['pitch_deg']:.2f}° ({self.last_processed_data['orientation']['pitch']:.6f} rad)")
+                        rospy.logwarn(f"    yaw:   {self.last_processed_data['orientation']['yaw_deg']:.2f}° ({self.last_processed_data['orientation']['yaw']:.6f} rad)")
+                        rospy.logwarn(f"  Angular velocity (rad/s):")
+                        rospy.logwarn(f"    x: {self.last_processed_data['angular_velocity']['x']:.6f}")
+                        rospy.logwarn(f"    y: {self.last_processed_data['angular_velocity']['y']:.6f}")
+                        rospy.logwarn(f"    z: {self.last_processed_data['angular_velocity']['z']:.6f}")
+                        rospy.logwarn(f"  Linear acceleration (m/s²):")
+                        rospy.logwarn(f"    x: {self.last_processed_data['linear_acceleration']['x']:.6f}")
+                        rospy.logwarn(f"    y: {self.last_processed_data['linear_acceleration']['y']:.6f}")
+                        rospy.logwarn(f"    z: {self.last_processed_data['linear_acceleration']['z']:.6f}")
+                        rospy.logwarn("=" * 80)
+                        self.fall_data_logged = True
+            elif self.robot_state == 'stand' and old_state != 'stand':
+                self.fall_start_time = None
+                self.last_auto_getup_time = 0
+                self.getup_action_in_progress = False
+                self.getup_attempt_count = 0
+                self.fall_check_cooldown = current_time + FALL_CHECK_COOLDOWN_DURATION
+                self.fall_data_logged = False  # Сбрасываем флаг для следующего падения
+                rospy.loginfo(f"✅ Robot recovered to stand position")
+    
+    def _check_robot_at_rest(self):
+        """
+        Проверяет, находится ли робот в покое (изменения ускорений ниже порога).
+        
+        Returns:
+            bool: True если робот в покое
+        """
+        if not self.fall_config['check_rest_enabled']:
+            return True
+        
+        threshold = self.fall_config['rest_accel_threshold']
+        check_duration = self.fall_config['rest_check_duration']
+        
+        # Нужно достаточно данных для проверки
+        if len(self.accel_history['x']) < 2:
+            return False
+        
+        # Вычисляем изменения ускорений за последние данные
+        # Используем последние N значений, соответствующих check_duration
+        # Предполагаем частоту обновления ~50Hz, значит check_duration * 50 значений
+        sample_rate = 50.0  # Hz
+        num_samples = int(check_duration * sample_rate)
+        num_samples = min(num_samples, len(self.accel_history['x']))
+        
+        if num_samples < 2:
+            return False
+        
+        # Вычисляем максимальное изменение ускорения
+        max_change = 0.0
+        for i in range(len(self.accel_history['x']) - num_samples, len(self.accel_history['x']) - 1):
+            change_x = abs(self.accel_history['x'][i+1] - self.accel_history['x'][i])
+            change_y = abs(self.accel_history['y'][i+1] - self.accel_history['y'][i])
+            change_z = abs(self.accel_history['z'][i+1] - self.accel_history['z'][i])
+            max_change = max(max_change, change_x, change_y, change_z)
+        
+        return max_change < threshold
+    
+    def check_auto_getup(self, motion_manager, can_move_func, 
+                         fall_forward_action, fall_backward_action,
+                         fall_left_action=None, fall_right_action=None):
         """
         Проверяет необходимость автоматического подъема.
         
         Args:
             motion_manager: Экземпляр MotionManager
             can_move_func: Функция проверки разрешения на движение
-            lie_action: Название действия для подъема из положения лежа
-            recline_action: Название действия для подъема из положения на спине
+            fall_forward_action: Название действия для подъема из падения вперед
+            fall_backward_action: Название действия для подъема из падения назад
+            fall_left_action: Название действия для подъема из падения влево (заглушка)
+            fall_right_action: Название действия для подъема из падения вправо (заглушка)
         
         Returns:
             bool: True если была выполнена попытка подъема
@@ -307,7 +485,7 @@ class IMUHandler:
         
         if self.getup_attempt_count >= self.max_getup_attempts:
             rospy.logerr(f"🚨 Auto-getup: Max attempts reached. Calling for help!")
-            return False  # Нужно вызвать функцию помощи отдельно
+            return False
         
         if self.getup_action_in_progress:
             if current_time - self.last_auto_getup_time > GETUP_ACTION_TIMEOUT:
@@ -321,10 +499,24 @@ class IMUHandler:
         
         try:
             action_to_run = None
-            if self.robot_state == 'lie_to_stand':
-                action_to_run = lie_action
-            elif self.robot_state == 'recline_to_stand':
-                action_to_run = recline_action
+            if self.robot_state == 'fall_forward':
+                action_to_run = fall_forward_action
+            elif self.robot_state == 'fall_backward':
+                action_to_run = fall_backward_action
+            elif self.robot_state == 'fall_left':
+                # Заглушка для падения влево
+                if fall_left_action:
+                    action_to_run = fall_left_action
+                else:
+                    rospy.logwarn(f"⚠️ Fall left action not implemented yet")
+                    return False
+            elif self.robot_state == 'fall_right':
+                # Заглушка для падения вправо
+                if fall_right_action:
+                    action_to_run = fall_right_action
+                else:
+                    rospy.logwarn(f"⚠️ Fall right action not implemented yet")
+                    return False
             
             if action_to_run and motion_manager is not None:
                 self.getup_action_in_progress = True
@@ -339,64 +531,6 @@ class IMUHandler:
         
         return False
     
-    def check_resonance(self, status):
-        """
-        Проверяет резонанс и возвращает фактор адаптации.
-        
-        Args:
-            status: Статус движения ('move' или 'stop')
-        
-        Returns:
-            float: Фактор адаптации (1.0 = без изменений, <1.0 = уменьшение)
-        """
-        if not self.resonance_detection_enabled or status != 'move':
-            return 1.0
-        
-        try:
-            with self.imu_lock:
-                if len(self.imu_history['ax']) < RESONANCE_HISTORY_MIN:
-                    return self.current_adaptation_factor
-                
-                # Расчет амплитуды качания
-                def calculate_amplitude(data_list):
-                    if len(data_list) < 2:
-                        return 0.0
-                    mean = sum(data_list) / len(data_list)
-                    variance = sum((x - mean) ** 2 for x in data_list) / len(data_list)
-                    return math.sqrt(variance)
-                
-                amplitude_x = calculate_amplitude(self.imu_history['ax'])
-                amplitude_y = calculate_amplitude(self.imu_history['ay'])
-                amplitude_z = calculate_amplitude(self.imu_history['az'])
-                amplitude_pitch = calculate_amplitude(self.imu_history['pitch'])
-                
-                max_amplitude = max(amplitude_x, amplitude_y, amplitude_z)
-                combined_amplitude = max(max_amplitude, abs(amplitude_pitch) * RESONANCE_PITCH_MULTIPLIER)
-            
-            old_factor = self.current_adaptation_factor
-            
-            if combined_amplitude > self.critical_amplitude:
-                self.current_adaptation_factor = RESONANCE_MIN_FACTOR
-                rospy.logwarn(f"⚠️ CRITICAL resonance detected! (amplitude={combined_amplitude:.3f} m/s²)")
-            elif combined_amplitude > self.max_safe_amplitude:
-                ratio = (combined_amplitude - self.max_safe_amplitude) / (self.critical_amplitude - self.max_safe_amplitude)
-                self.current_adaptation_factor = 1.0 - ratio * RESONANCE_REDUCTION_RATIO
-                rospy.loginfo(f"📊 High amplitude detected (amplitude={combined_amplitude:.3f} m/s²)")
-            else:
-                if self.current_adaptation_factor < 1.0:
-                    self.current_adaptation_factor = min(1.0, self.current_adaptation_factor + RESONANCE_ADAPTATION_STEP)
-            
-            return self.current_adaptation_factor
-            
-        except Exception as e:
-            rospy.logwarn(f"❌ Error in resonance detection: {e}")
-            return self.current_adaptation_factor
-    
     def get_robot_state(self):
         """Возвращает текущее состояние робота."""
         return self.robot_state
-    
-    def reset_adaptation(self):
-        """Сбрасывает фактор адаптации."""
-        self.current_adaptation_factor = 1.0
-
