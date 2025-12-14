@@ -304,8 +304,10 @@ class JoystickController:
             return
         
         # Обновление автостабилизации
-        if self.auto_stabilization.enabled and self.imu_handler.get_robot_state() == 'stand':
+        # ВАЖНО: Вызываем process() всегда (не только когда стоит), чтобы стабилизация могла остановить движение при падении
+        if self.auto_stabilization.enabled:
             # Обрабатываем стабилизацию с новыми данными IMU
+            # process() сам проверит состояние робота и остановит движение при падении
             self.auto_stabilization.process(
                 imu_data,
                 self.imu_handler.get_robot_state(),
