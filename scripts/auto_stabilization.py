@@ -15,10 +15,35 @@
 
 # ========== КОНФИГУРАЦИЯ: СТАБИЛИЗАЦИЯ В ПОКОЕ ==========
 REST_STABILIZATION_CONFIG = {
-    # Критические углы по каждой оси (в градусах) - после которых начинается стабилизация
-    'critical_angle_roll': 25.0,   # Критический угол крена (наклон влево/вправо)
-    'critical_angle_pitch': 34.0,  # Критический угол тангажа (наклон вперед/назад)
-    'critical_angle_yaw': 15.0,     # Критический угол рыскания (поворот)
+    # Эталонная ориентация (нормальное положение робота)
+    'reference_mode': 'auto',  # 'none' - без эталона, 'manual' - вручную, 'auto' - авто (через 3 сек после запуска)
+    'reference_manual': {  # Используется только если reference_mode='manual'
+        'roll': 0.0,
+        'pitch': 90.0,  # Нормальное положение около 90°
+        'yaw': 0.0
+    },
+    'reference_auto_delay': 3.0,  # Задержка перед сбором эталона (сек)
+    
+    # Включение/выключение стабилизации по осям
+    'stabilization_enabled': {
+        'roll': True,   # Стабилизация по крену (влево/вправо)
+        'pitch': True,  # Стабилизация по тангажу (вперед/назад)
+        'yaw': False,    # Стабилизация по рысканию (поворот)
+    },
+    
+    # Критические углы (диапазоны отклонения от эталона)
+    'critical_angles': {
+        'roll': {'left': 15.0, 'right': 15.0},   # Влево/вправо
+        'pitch': {'forward': 15.0, 'backward': 17.0},  # Вперед/назад (отклонение от 90°)
+        'yaw': {'left': 10.0, 'right': 10.0},    # Поворот влево/вправо
+    },
+    
+    # Порог стабильности для остановки стабилизации (отклонение от эталона)
+    'stable_threshold': {
+        'roll': 30.0,
+        'pitch': 30.0,
+        'yaw': 30.0,
+    },
     
     # Параметры для gait_manager при стабилизации (отдельные от джойстика)
     'gait_params': {
@@ -34,40 +59,26 @@ REST_STABILIZATION_CONFIG = {
         }
     },
     
-    # Коэффициенты для расчета амплитуды шага на основе угла наклона
-    'step_amplitude_coefficients': {
-        'roll': 0.002,   # Коэффициент для шага по Y при наклоне по roll (м/градус)
-        'pitch': 0.002,  # Коэффициент для шага по X при наклоне по pitch (м/градус)
-        'yaw': 2.0,      # Коэффициент для поворота при наклоне по yaw (градус/градус)
+    # Коэффициенты для расчета амплитуды движения на основе отклонения от эталона
+    'correction_coefficients': {
+        'roll': 0.002,   # Коэффициент для движения по Y при отклонении roll (м/градус)
+        'pitch': 0.002,  # Коэффициент для движения по X при отклонении pitch (м/градус)
+        'yaw': 2.0,      # Коэффициент для поворота при отклонении yaw (градус/градус)
     },
     
-    # Максимальные амплитуды шагов стабилизации
-    'max_step_amplitudes': {
-        'x': 0.015,      # Максимальный шаг вперед/назад (м)
-        'y': 0.015,      # Максимальный шаг влево/вправо (м)
+    # Максимальные амплитуды движения стабилизации
+    'max_amplitudes': {
+        'x': 0.015,      # Максимальное движение вперед/назад (м)
+        'y': 0.015,      # Максимальное движение влево/вправо (м)
         'angle': 8.0,    # Максимальный поворот (градусы)
     },
     
-    # Динамический подбор параметров
-    'dynamic_tuning_enabled': True,  # Включить/выключить динамический подбор параметров
-    'tuning_coefficients': {
-        'period_time': 0.1,         # Коэффициент изменения периода (0.0-1.0)
-        'step_amplitude': 0.05,     # Коэффициент изменения амплитуды шага (0.0-1.0)
-        'gait_base': 0.05,          # Коэффициент изменения gait_base параметров (0.0-1.0)
-    },
+    # Интервал обновления параметров стабилизации
+    'update_interval': 0.1,  # Интервал обновления параметров (сек)
     
     # Параметр возврата
-    'return_enabled': True,         # Включить/выключить возврат после стабилизации
-    'return_delay': 0.5,            # Задержка перед началом возврата (сек)
-    'return_stable_threshold': 3.0, # Порог стабильности для начала возврата (градусы)
-    
-    # Стабилизация YAW (поворота)
-    'yaw_stabilization_enabled': True,  # Включить/выключить стабилизацию поворота
-    'yaw_stabilization_delay': 2.0,     # Задержка после прекращения воздействия (сек)
-    'yaw_stable_threshold': 5.0,        # Порог стабильности YAW для начала разворота (градусы)
-    
-    # Интервалы между шагами стабилизации
-    'step_interval': 0.1,           # Минимальный интервал между шагами (сек)
+    'return_enabled': False,  # Включить/выключить возврат после стабилизации
+    'return_delay': 0.5,      # Задержка перед началом возврата (сек)
 }
 
 # ========== КОНФИГУРАЦИЯ: СТАБИЛИЗАЦИЯ ПРИ ХОДЬБЕ ==========
@@ -100,22 +111,40 @@ class AutoStabilization:
         
         # Состояние стабилизации в покое
         self.rest_stabilization_state = {
-            'last_step_time': 0,
-            'steps_taken': {'x': 0, 'y': 0, 'angle': 0},  # Счетчик шагов для возврата
-            'last_tilt': {'roll': 0, 'pitch': 0, 'yaw': 0},  # Последний наклон
+            'reference': None,  # Эталонная ориентация {'roll': x, 'pitch': y, 'yaw': z}
+            'reference_set': False,  # Установлен ли эталон
+            'reference_set_time': None,  # Время установки эталона
             'stabilization_active': False,  # Активна ли стабилизация
+            'last_update_time': 0,  # Время последнего обновления параметров
+            'movement_history': [],  # История перемещений для возврата [{'x': x, 'y': y, 'angle': a, 'time': t}, ...]
             'return_pending': False,  # Ожидается ли возврат
             'return_start_time': None,  # Время начала возврата
-            'yaw_stabilization_pending': False,  # Ожидается ли стабилизация YAW
-            'yaw_stabilization_start_time': None,  # Время начала стабилизации YAW
-            'last_yaw': 0,  # Последний YAW для отслеживания изменений
-            'yaw_change_time': None,  # Время последнего изменения YAW
-            'last_imu_time': 0,  # Время последнего получения данных IMU
-            'last_processed_angles': None,  # Последние обработанные углы для сравнения
         }
         
+        # Инициализация эталона
+        self._init_reference()
+        
         rospy.loginfo("AutoStabilization module initialized (Rest + Walking)")
-        rospy.loginfo("  Rest stabilization: Ready with IMU parameters")
+        rospy.loginfo("  Rest stabilization: Simplified dynamic approach")
+    
+    def _init_reference(self):
+        """Инициализирует эталонную ориентацию в зависимости от режима."""
+        config = self.rest_config
+        mode = config.get('reference_mode', 'auto')
+        
+        if mode == 'manual':
+            self.rest_stabilization_state['reference'] = config['reference_manual'].copy()
+            self.rest_stabilization_state['reference_set'] = True
+            rospy.loginfo(f"📐 Reference orientation (manual): {self.rest_stabilization_state['reference']}")
+        elif mode == 'auto':
+            # Эталон будет установлен автоматически через delay секунд
+            self.rest_stabilization_state['reference_set'] = False
+            rospy.loginfo(f"📐 Reference orientation: will be set automatically after {config['reference_auto_delay']}s")
+        else:  # 'none'
+            # Без эталона - используем абсолютные углы
+            self.rest_stabilization_state['reference'] = {'roll': 0.0, 'pitch': 90.0, 'yaw': 0.0}
+            self.rest_stabilization_state['reference_set'] = True
+            rospy.loginfo("📐 Reference orientation: disabled (using absolute angles)")
     
     def process(self, imu_data, robot_state, status, x_move_amp, y_move_amp, angle_move_amp):
         """
@@ -151,7 +180,7 @@ class AutoStabilization:
     
     def _process_rest_stabilization(self, imu_data, robot_state, x_move_amp, y_move_amp, angle_move_amp):
         """
-        Обрабатывает стабилизацию в покое.
+        Упрощенная стабилизация: при выходе за лимит активируем ходьбу и обновляем параметры.
         
         Args:
             imu_data: Словарь с данными IMU
@@ -161,7 +190,7 @@ class AutoStabilization:
             angle_move_amp: Амплитуда поворота (от джойстика)
         
         Returns:
-            bool: True если был выполнен шаг стабилизации
+            bool: True если была выполнена стабилизация
         """
         # Проверяем, нет ли движения от джойстика
         joystick_moving = (abs(x_move_amp) > JOYSTICK_MOVE_THRESHOLD or 
@@ -169,192 +198,254 @@ class AutoStabilization:
                           abs(angle_move_amp) > JOYSTICK_MOVE_THRESHOLD)
         
         if joystick_moving:
-            # Если есть движение от джойстика, сбрасываем состояние стабилизации
             if self.rest_stabilization_state['stabilization_active']:
                 rospy.loginfo("🎮 Joystick movement detected - stopping stabilization")
             self._reset_rest_stabilization_state()
             return False
         
-        # Получаем углы ориентации - ВАЖНО: используем свежие данные из текущего вызова
+        # Проверяем, не упал ли робот - если упал, прекращаем стабилизацию
+        if robot_state != 'stand':
+            if self.rest_stabilization_state['stabilization_active']:
+                rospy.logwarn(f"⚠️ Robot fell ({robot_state}) - stopping stabilization")
+                try:
+                    self.gait_manager.stop()
+                except Exception as e:
+                    rospy.logwarn(f"Error stopping gait_manager: {e}")
+                self._reset_rest_stabilization_state()
+            return False
+        
+        # Получаем углы ориентации
         orientation = imu_data.get('orientation', {})
         if not orientation:
-            rospy.logwarn("⚠️ No orientation data in IMU")
             return False
             
-        # ВАЖНО: Получаем свежие значения каждый раз, не используем кэш
         roll_deg = orientation.get('roll_deg', 0)
         pitch_deg = orientation.get('pitch_deg', 0)
         yaw_deg = orientation.get('yaw_deg', 0)
         
         current_time = rospy.get_time()
         state = self.rest_stabilization_state
+        config = self.rest_config
         
-        # Проверяем свежесть данных IMU - если данные старые, не обрабатываем
-        # Это предотвращает обработку устаревших данных, если callback заблокирован
-        imu_age = current_time - state['last_imu_time']
-        max_imu_age = 0.5  # Максимальный возраст данных IMU (сек)
+        # Устанавливаем эталон, если нужно (auto режим)
+        if not state['reference_set'] and config['reference_mode'] == 'auto':
+            if state['reference_set_time'] is None:
+                state['reference_set_time'] = current_time
+            elif current_time - state['reference_set_time'] >= config['reference_auto_delay']:
+                state['reference'] = {'roll': roll_deg, 'pitch': pitch_deg, 'yaw': yaw_deg}
+                state['reference_set'] = True
+                rospy.loginfo(f"📐 Reference orientation (auto): {state['reference']}")
         
-        # Обновляем время получения данных
-        state['last_imu_time'] = current_time
+        if not state['reference_set']:
+            return False  # Ждем установки эталона
         
-        # Проверяем, изменились ли углы (для отладки)
-        current_angles = (roll_deg, pitch_deg, yaw_deg)
-        if state['last_processed_angles'] is not None:
-            angle_change = (
-                abs(roll_deg - state['last_processed_angles'][0]),
-                abs(pitch_deg - state['last_processed_angles'][1]),
-                abs(yaw_deg - state['last_processed_angles'][2])
-            )
-            if max(angle_change) > 1.0:  # Значительное изменение углов
-                rospy.loginfo(f"📊 Angle change detected: roll={angle_change[0]:.2f}°, "
-                            f"pitch={angle_change[1]:.2f}°, yaw={angle_change[2]:.2f}°")
+        # Вычисляем отклонения от эталона
+        ref = state['reference']
+        roll_dev = roll_deg - ref['roll']
+        pitch_dev = pitch_deg - ref['pitch']
+        yaw_dev = yaw_deg - ref['yaw']
         
-        state['last_processed_angles'] = current_angles
+        # Проверяем, вышли ли за критические углы (с учетом включения/выключения осей)
+        critical = config['critical_angles']
+        enabled = config['stabilization_enabled']
         
-        # Если данные слишком старые, пропускаем обработку
-        if imu_age > max_imu_age and state['last_imu_time'] > 0:
-            rospy.logwarn(f"⚠️ IMU data too old: {imu_age:.3f}s (max: {max_imu_age}s) - skipping")
-            return False
+        roll_exceeded = False
+        if enabled['roll']:
+            roll_critical = critical['roll']['left'] if roll_dev > 0 else critical['roll']['right']
+            roll_exceeded = abs(roll_dev) > roll_critical
         
-        # Логируем текущие углы для отладки (только если стабилизация активна)
-        if state['stabilization_active']:
-            rospy.loginfo(f"📊 Current angles: roll={roll_deg:.2f}°, pitch={pitch_deg:.2f}°, yaw={yaw_deg:.2f}° (age: {imu_age:.3f}s)")
+        pitch_exceeded = False
+        if enabled['pitch']:
+            pitch_critical = critical['pitch']['forward'] if pitch_dev < 0 else critical['pitch']['backward']
+            pitch_exceeded = abs(pitch_dev) > pitch_critical
         
-        # Проверяем необходимость стабилизации по наклону
-        needs_stabilization = self._check_stabilization_needed(roll_deg, pitch_deg, yaw_deg)
+        yaw_exceeded = False
+        if enabled['yaw']:
+            yaw_critical = critical['yaw']['left'] if yaw_dev > 0 else critical['yaw']['right']
+            yaw_exceeded = abs(yaw_dev) > yaw_critical
         
-        # Обрабатываем возврат после стабилизации
-        if self.rest_config['return_enabled'] and state['return_pending']:
-            # Если робот снова наклонился во время возврата - прерываем возврат
+        needs_stabilization = roll_exceeded or pitch_exceeded or yaw_exceeded
+        
+        # Обрабатываем возврат
+        if config['return_enabled'] and state['return_pending']:
             if needs_stabilization:
-                rospy.logwarn("⚠️ Robot tilted during return - canceling return and restarting stabilization")
                 state['return_pending'] = False
                 state['return_start_time'] = None
             elif state['return_start_time'] is None:
                 state['return_start_time'] = current_time
-            
-            # Проверяем задержку перед возвратом
-            if state['return_start_time'] is not None and current_time - state['return_start_time'] >= self.rest_config['return_delay']:
-                # Проверяем стабильность перед возвратом
-                if self._is_stable(roll_deg, pitch_deg, yaw_deg, self.rest_config['return_stable_threshold']):
-                    return self._execute_return_steps()
-                else:
-                    # Робот нестабилен - отменяем возврат
-                    rospy.logwarn("⚠️ Robot unstable during return - canceling return")
-                    state['return_pending'] = False
-                    state['return_start_time'] = None
+            elif current_time - state['return_start_time'] >= config['return_delay']:
+                return self._execute_return()
         
-        # Обрабатываем стабилизацию YAW
-        if self.rest_config['yaw_stabilization_enabled']:
-            self._process_yaw_stabilization(yaw_deg, current_time)
+        # Проверяем стабильность (только по включенным осям)
+        stable = config['stable_threshold']
+        is_stable = True
+        if enabled['roll']:
+            is_stable = is_stable and abs(roll_dev) < stable['roll']
+        if enabled['pitch']:
+            is_stable = is_stable and abs(pitch_dev) < stable['pitch']
+        if enabled['yaw']:
+            is_stable = is_stable and abs(yaw_dev) < stable['yaw']
         
-        # Выполняем стабилизацию по наклону
         if needs_stabilization:
-            # Проверяем, не стабилен ли уже робот (чтобы не продолжать стабилизацию бесконечно)
-            # Используем более строгий порог для остановки - половина критического угла
-            config = self.rest_config
-            stable_threshold_roll = config['critical_angle_roll'] * 0.5
-            stable_threshold_pitch = config['critical_angle_pitch'] * 0.5
-            is_stable_now = (abs(roll_deg) < stable_threshold_roll and 
-                            abs(pitch_deg - 90.0) < stable_threshold_pitch)
-            
-            if is_stable_now and state['stabilization_active']:
-                # Робот уже стабилен - останавливаем стабилизацию и движение
-                rospy.loginfo(f"✅ Stabilization: Robot is stable (roll={roll_deg:.2f}°, pitch={pitch_deg:.2f}°) - stopping immediately")
-                try:
-                    self.gait_manager.stop()
-                except Exception as e:
-                    rospy.logwarn(f"Error stopping gait_manager: {e}")
-                state['stabilization_active'] = False
-                state['last_step_time'] = 0  # Сбрасываем таймер, чтобы можно было сразу начать возврат
-                if self.rest_config['return_enabled'] and self._has_steps_to_return():
-                    state['return_pending'] = True
-                    state['return_start_time'] = None
-                    rospy.loginfo(f"📤 Return planned: {state['steps_taken']}")
-                return False
-            
-            # Робот нестабилен - продолжаем стабилизацию
+            # Активируем стабилизацию
             if not state['stabilization_active']:
-                rospy.logwarn(f"⚠️ Stabilization started: roll={roll_deg:.2f}° (critical: {config['critical_angle_roll']:.1f}°), "
-                             f"pitch={pitch_deg:.2f}° (deviation from 90°: {abs(pitch_deg - 90.0):.2f}°, critical: {config['critical_angle_pitch']:.1f}°)")
+                rospy.logwarn(f"⚠️ Stabilization started: roll_dev={roll_dev:.2f}°, pitch_dev={pitch_dev:.2f}°, yaw_dev={yaw_dev:.2f}°")
+                state['stabilization_active'] = True
+                state['movement_history'] = []
             
-            state['stabilization_active'] = True
-            state['last_tilt'] = {'roll': roll_deg, 'pitch': pitch_deg, 'yaw': yaw_deg}
+            # Обновляем параметры движения
+            if current_time - state['last_update_time'] >= config['update_interval']:
+                self._update_stabilization_movement(roll_dev, pitch_dev, yaw_dev, current_time)
+                state['last_update_time'] = current_time
+                return True
+        elif state['stabilization_active']:
+            # Стабилизация завершена
+            rospy.loginfo(f"✅ Stabilization: Robot stable (roll_dev={roll_dev:.2f}°, pitch_dev={pitch_dev:.2f}°, yaw_dev={yaw_dev:.2f}°)")
+            try:
+                self.gait_manager.stop()
+            except Exception as e:
+                rospy.logwarn(f"Error stopping gait_manager: {e}")
+            state['stabilization_active'] = False
             
-            # Проверяем интервал между шагами
-            time_since_last_step = current_time - state['last_step_time']
-            if time_since_last_step >= self.rest_config['step_interval']:
-                # ВАЖНО: Используем ТЕКУЩИЕ углы для вычисления амплитуд (не кэшированные)
-                # Также проверяем, что данные свежие (не старше 0.2 сек)
-                if imu_age < 0.2:
-                    step_executed = self._execute_stabilization_step(roll_deg, pitch_deg)
-                    if step_executed:
-                        state['last_step_time'] = current_time
-                        # Сбрасываем возврат, так как началась новая стабилизация
-                        state['return_pending'] = False
-                        state['return_start_time'] = None
-                    return step_executed
-                else:
-                    rospy.logwarn(f"⚠️ Skipping step - IMU data too old: {imu_age:.3f}s")
-                    return False
-            else:
-                # Ждем интервал - не выполняем шаг, но и не останавливаем стабилизацию
-                # Логируем, если данные изменились, но мы еще ждем интервал
-                if state['last_processed_angles'] is not None:
-                    angle_change = max(
-                        abs(roll_deg - state['last_processed_angles'][0]),
-                        abs(pitch_deg - state['last_processed_angles'][1])
-                    )
-                    if angle_change > 2.0:  # Значительное изменение
-                        rospy.loginfo(f"⏳ Waiting for step interval: {time_since_last_step:.3f}s / {self.rest_config['step_interval']:.3f}s, "
-                                    f"angle change: {angle_change:.2f}°")
-                return False
-        else:
-            # Наклон в пределах нормы - ОБЯЗАТЕЛЬНО останавливаем движение, если оно было активно
-            if state['stabilization_active']:
-                # Завершили стабилизацию - останавливаем движение и планируем возврат
-                rospy.loginfo(f"✅ Stabilization: Angle within normal range (roll={roll_deg:.2f}°, pitch={pitch_deg:.2f}°) - stopping")
-                try:
-                    self.gait_manager.stop()
-                except Exception as e:
-                    rospy.logwarn(f"Error stopping gait_manager: {e}")
-                
-                state['stabilization_active'] = False
-                state['last_step_time'] = 0  # Сбрасываем таймер
-                if self.rest_config['return_enabled'] and self._has_steps_to_return():
-                    state['return_pending'] = True
-                    state['return_start_time'] = None
-                    rospy.loginfo(f"📤 Return planned: {state['steps_taken']}")
-            elif state['return_pending']:
-                # Если возврат активен, но робот снова наклонился - отменяем возврат
-                # (это уже обработано выше, но на всякий случай)
-                pass
+            if config['return_enabled'] and len(state['movement_history']) > 0:
+                state['return_pending'] = True
+                state['return_start_time'] = None
         
         return False
     
-    def _check_stabilization_needed(self, roll_deg, pitch_deg, yaw_deg):
+    def _update_stabilization_movement(self, roll_dev, pitch_dev, yaw_dev, current_time):
         """
-        Проверяет, нужна ли стабилизация на основе углов ориентации.
+        Обновляет параметры движения стабилизации через set_step (запускает движение).
         
         Args:
-            roll_deg: Угол крена в градусах
-            pitch_deg: Угол тангажа в градусах
-            yaw_deg: Угол рыскания в градусах
-        
-        Returns:
-            bool: True если нужна стабилизация
+            roll_dev: Отклонение roll от эталона (градусы)
+            pitch_dev: Отклонение pitch от эталона (градусы)
+            yaw_dev: Отклонение yaw от эталона (градусы)
+            current_time: Текущее время
         """
         config = self.rest_config
-        critical_roll = config['critical_angle_roll']
-        critical_pitch = config['critical_angle_pitch']
+        state = self.rest_stabilization_state
         
-        # Проверяем roll и pitch (yaw обрабатывается отдельно)
-        roll_exceeded = abs(roll_deg) > critical_roll
-        # Для pitch: нормальное положение около 90°, проверяем отклонение
-        pitch_deviation = abs(pitch_deg - 90.0)
-        pitch_exceeded = pitch_deviation > critical_pitch
+        # Получаем параметры походки
+        gait_param = self.gait_manager.get_gait_param().copy()
+        gait_params = config['gait_params']
+        period_time = list(gait_params['period_time'])
         
-        return roll_exceeded or pitch_exceeded
+        # Применяем базовые параметры стабилизации
+        gait_param.update(gait_params.get('gait_base', {}))
+        gait_param['init_z_offset'] = self.init_z_offset
+        
+        # Вычисляем амплитуды движения на основе отклонений
+        coeffs = config['correction_coefficients']
+        max_amps = config['max_amplitudes']
+        
+        # Roll: отклонение влево (положительное) -> движение влево (положительный Y)
+        y_amplitude = roll_dev * coeffs['roll']
+        y_amplitude = max(-max_amps['y'], min(max_amps['y'], y_amplitude))
+        
+        # Pitch: отклонение вперед (отрицательное) -> движение вперед (положительный X)
+        x_amplitude = -pitch_dev * coeffs['pitch']
+        x_amplitude = max(-max_amps['x'], min(max_amps['x'], x_amplitude))
+        
+        # YAW: отклонение влево (положительное) -> поворот влево (положительный угол)
+        # Только если стабилизация YAW включена
+        if config['stabilization_enabled']['yaw']:
+            angle_amplitude = yaw_dev * coeffs['yaw']
+            angle_amplitude = max(-max_amps['angle'], min(max_amps['angle'], angle_amplitude))
+        else:
+            angle_amplitude = 0
+        
+        # Используем set_step для запуска движения (как в speed_control)
+        try:
+            self.gait_manager.set_step(
+                period_time,
+                x_amplitude,
+                y_amplitude,
+                angle_amplitude,
+                gait_param,
+                step_num=0  # Непрерывное движение (неблокирующий)
+            )
+            
+            # Сохраняем в историю перемещений
+            state['movement_history'].append({
+                'x': x_amplitude,
+                'y': y_amplitude,
+                'angle': angle_amplitude,
+                'time': current_time
+            })
+            
+            # Ограничиваем размер истории (последние 100 записей)
+            if len(state['movement_history']) > 100:
+                state['movement_history'].pop(0)
+            
+            rospy.loginfo(f"🔄 Stabilization: X={x_amplitude:.4f}, Y={y_amplitude:.4f}, "
+                         f"Angle={angle_amplitude:.2f}°, dev: roll={roll_dev:.2f}°, pitch={pitch_dev:.2f}°, yaw={yaw_dev:.2f}°")
+        except Exception as e:
+            rospy.logerr(f"Error updating stabilization movement: {e}")
+    
+    def _execute_return(self):
+        """
+        Выполняет возврат на основе истории перемещений.
+        
+        Returns:
+            bool: True если возврат выполняется
+        """
+        state = self.rest_stabilization_state
+        history = state['movement_history']
+        
+        if len(history) == 0:
+            state['return_pending'] = False
+            return False
+        
+        # Вычисляем суммарное смещение
+        total_x = sum(h['x'] for h in history)
+        total_y = sum(h['y'] for h in history)
+        total_angle = sum(h['angle'] for h in history)
+        
+        # Вычисляем обратное движение (противоположное направление)
+        return_x = -total_x / len(history) if len(history) > 0 else 0
+        return_y = -total_y / len(history) if len(history) > 0 else 0
+        return_angle = -total_angle / len(history) if len(history) > 0 else 0
+        
+        # Ограничиваем амплитуды
+        config = self.rest_config
+        max_amps = config['max_amplitudes']
+        return_x = max(-max_amps['x'], min(max_amps['x'], return_x))
+        return_y = max(-max_amps['y'], min(max_amps['y'], return_y))
+        return_angle = max(-max_amps['angle'], min(max_amps['angle'], return_angle))
+        
+        if abs(return_x) < 0.001 and abs(return_y) < 0.001 and abs(return_angle) < 0.1:
+            # Возврат завершен
+            rospy.loginfo("✅ Return completed")
+            try:
+                self.gait_manager.stop()
+            except Exception as e:
+                rospy.logwarn(f"Error stopping gait_manager after return: {e}")
+            state['return_pending'] = False
+            state['movement_history'] = []
+            return False
+        
+        # Выполняем возврат через set_step
+        gait_param = self.gait_manager.get_gait_param().copy()
+        gait_params = config['gait_params']
+        period_time = list(gait_params['period_time'])
+        gait_param.update(gait_params.get('gait_base', {}))
+        gait_param['init_z_offset'] = self.init_z_offset
+        
+        try:
+            self.gait_manager.set_step(
+                period_time,
+                return_x,
+                return_y,
+                return_angle,
+                gait_param,
+                step_num=0  # Непрерывное движение
+            )
+            rospy.loginfo(f"↩️ Return: X={return_x:.4f}, Y={return_y:.4f}, Angle={return_angle:.2f}°")
+            return True
+        except Exception as e:
+            rospy.logerr(f"Error executing return: {e}")
+            return False
     
     def _execute_stabilization_step(self, roll_deg, pitch_deg):
         """
@@ -663,14 +754,11 @@ class AutoStabilization:
     def _reset_rest_stabilization_state(self):
         """Сбрасывает состояние стабилизации в покое."""
         state = self.rest_stabilization_state
-        state['steps_taken'] = {'x': 0, 'y': 0, 'angle': 0}
         state['stabilization_active'] = False
         state['return_pending'] = False
         state['return_start_time'] = None
-        state['yaw_stabilization_pending'] = False
-        state['yaw_stabilization_start_time'] = None
-        state['yaw_change_time'] = None
-        state['last_processed_angles'] = None
+        state['movement_history'] = []
+        state['last_update_time'] = 0
     
     def _process_walking_stabilization(self, imu_data):
         """
