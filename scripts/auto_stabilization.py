@@ -45,9 +45,15 @@ REST_STABILIZATION_CONFIG = {
         'yaw': 20.0,
     },
     
-    # Параметры угловой скорости для первого шага стабилизации
+    # Параметры угловой скорости для активации и первого шага стабилизации
     'angular_velocity': {
-        'min_velocity': 0.05,  # Минимальная угловая скорость для использования в первом шаге (рад/с)
+        'activation_enabled': True,  # Включить/выключить активацию стабилизации по угловой скорости
+        'activation_thresholds': {  # Пороговые значения угловой скорости для активации стабилизации (рад/с)
+            'roll': 0.5,   # Минимальная угловая скорость по roll для активации
+            'pitch': 0.5,  # Минимальная угловая скорость по pitch для активации
+            'yaw': 0.5,    # Минимальная угловая скорость по yaw для активации
+        },
+        'min_velocity': 0.1,  # Минимальная угловая скорость для использования в первом шаге (рад/с)
         'coefficients': {
             'roll': 0.015,   # Коэффициент для roll (м/(рад/с)) - конвертация скорости в амплитуду Y
             'pitch': 0.015,  # Коэффициент для pitch (м/(рад/с)) - конвертация скорости в амплитуду X
@@ -58,7 +64,7 @@ REST_STABILIZATION_CONFIG = {
     # Определение качания (oscillation) - для предотвращения лишних шагов
     'oscillation_detection': {
         'enabled': True,  # Включить/выключить определение качания
-        'direction_change_threshold': 0.5,  # Время в секундах - если направление угловой скорости меняется чаще, это качание
+        'direction_change_threshold': 1.2,  # Время в секундах - если направление угловой скорости меняется чаще, это качание
         'min_velocity_for_oscillation': 0.1,  # Минимальная угловая скорость для учета в определении качания (рад/с)
     },
     
@@ -71,8 +77,8 @@ REST_STABILIZATION_CONFIG = {
         'gait_base': {
             'dsp_ratio': 0.25,              # Двойная опора - больше стабильности
             'step_fb_ratio': 0.020,         # Дистанция шага (меньше для точности)
-            'y_swap_amplitude': 0.015,      # Амплитуда обмена по Y
-            'z_swap_amplitude': 0.008,      # Амплитуда подъема ноги
+            'y_swap_amplitude': 0.025,      # Амплитуда обмена по Y
+            'z_swap_amplitude': 0.011,      # Амплитуда подъема ноги
             'init_y_offset': -0.005,
             'init_roll_offset': 0.0,
             'init_pitch_offset': 0.0
@@ -88,8 +94,8 @@ REST_STABILIZATION_CONFIG = {
     
     # Максимальные амплитуды движения стабилизации
     'max_amplitudes': {
-        'x': 0.015,      # Максимальное движение вперед/назад (м)
-        'y': 0.015,      # Максимальное движение влево/вправо (м)
+        'x': 0.025,      # Максимальное движение вперед/назад (м)
+        'y': 0.025,      # Максимальное движение влево/вправо (м)
         'angle': 8.0,    # Максимальный поворот (градусы)
     },
     
@@ -302,7 +308,21 @@ class AutoStabilization:
             yaw_critical = critical['yaw']['left'] if yaw_dev > 0 else critical['yaw']['right']
             yaw_exceeded = abs(yaw_dev) > yaw_critical
         
-        needs_stabilization = roll_exceeded or pitch_exceeded or yaw_exceeded
+        # Проверяем активацию по угловой скорости (быстрая реакция)
+        velocity_exceeded = False
+        if config.get('angular_velocity', {}).get('activation_enabled', False):
+            vel_config = config.get('angular_velocity', {})
+            vel_thresholds = vel_config.get('activation_thresholds', {})
+            
+            if enabled['roll'] and abs(roll_vel) > vel_thresholds.get('roll', 0.3):
+                velocity_exceeded = True
+            if enabled['pitch'] and abs(pitch_vel) > vel_thresholds.get('pitch', 0.3):
+                velocity_exceeded = True
+            if enabled['yaw'] and abs(yaw_vel) > vel_thresholds.get('yaw', 0.3):
+                velocity_exceeded = True
+        
+        # Стабилизация нужна если превышены углы ИЛИ угловая скорость
+        needs_stabilization = roll_exceeded or pitch_exceeded or yaw_exceeded or velocity_exceeded
         
         # Проверяем cooldown - не активируем новую стабилизацию сразу после предыдущей
         if needs_stabilization and current_time < state['cooldown_until']:
@@ -348,7 +368,15 @@ class AutoStabilization:
         if needs_stabilization:
             # Активируем стабилизацию
             if not state['stabilization_active']:
-                rospy.logwarn(f"⚠️ Stabilization started: roll_dev={roll_dev:.2f}°, pitch_dev={pitch_dev:.2f}°, yaw_dev={yaw_dev:.2f}°")
+                # Определяем причину активации
+                activation_reason = []
+                if roll_exceeded or pitch_exceeded or yaw_exceeded:
+                    activation_reason.append(f"angles (roll_dev={roll_dev:.2f}°, pitch_dev={pitch_dev:.2f}°, yaw_dev={yaw_dev:.2f}°)")
+                if velocity_exceeded:
+                    activation_reason.append(f"velocity (roll_vel={roll_vel:.3f}, pitch_vel={pitch_vel:.3f}, yaw_vel={yaw_vel:.3f} rad/s)")
+                
+                reason_str = " + ".join(activation_reason)
+                rospy.logwarn(f"⚠️ Stabilization started: {reason_str}")
                 state['stabilization_active'] = True
                 state['first_step'] = True  # Первый шаг - используем угловую скорость
                 state['movement_history'] = []
@@ -419,6 +447,7 @@ class AutoStabilization:
         if first_step:
             # Первый шаг: используем угловую скорость для определения направления
             # Это дает быструю реакцию даже при небольших углах
+            # ВАЖНО: Используем ту же логику знаков, что и для углов, чтобы направления совпадали
             
             vel_config = config.get('angular_velocity', {})
             min_vel = vel_config.get('min_velocity', 0.2)
@@ -428,30 +457,35 @@ class AutoStabilization:
                 'yaw': 15.0
             })
             
-            # Roll: положительная скорость = наклон влево = шаг влево (положительный Y)
-            # Используем угловую скорость только если она превышает минимальный порог
+            # Roll: используем угловую скорость с той же логикой знаков, что и для углов
+            # roll_dev > 0 (отклонение влево) -> y > 0 (шаг влево) -> y = roll_dev * coeff
+            # Для угловой скорости: roll_vel > 0 (падение влево) -> y > 0 (шаг влево) -> y = roll_vel * vel_coeff
             if abs(roll_vel) > min_vel:
-                y_amplitude = roll_vel * vel_coeffs['roll']
+                y_amplitude = roll_vel * vel_coeffs['roll']  # Тот же знак, что и для углов
             else:
                 # Если скорость мала, используем углы
                 y_amplitude = roll_dev * coeffs['roll']
             
-            # Pitch: отрицательная скорость = наклон вперед = шаг вперед (положительный X)
+            # Pitch: используем угловую скорость с той же логикой знаков, что и для углов
+            # pitch_dev < 0 (наклон вперед) -> x > 0 (шаг вперед) -> x = -pitch_dev * coeff
+            # Для угловой скорости: pitch_vel < 0 (падение вперед) -> x > 0 (шаг вперед) -> x = -pitch_vel * vel_coeff
             if abs(pitch_vel) > min_vel:
-                x_amplitude = -pitch_vel * vel_coeffs['pitch']  # Отрицательный знак
+                x_amplitude = -pitch_vel * vel_coeffs['pitch']  # Тот же знак, что и для углов
             else:
                 x_amplitude = -pitch_dev * coeffs['pitch']
             
-            # YAW: положительная скорость = поворот влево = поворот влево (положительный угол)
+            # YAW: используем угловую скорость с той же логикой знаков, что и для углов
+            # yaw_dev > 0 (отклонение влево) -> angle > 0 (поворот влево) -> angle = yaw_dev * coeff
+            # Для угловой скорости: yaw_vel > 0 (поворот влево) -> angle > 0 (поворот влево) -> angle = yaw_vel * vel_coeff
             if config['stabilization_enabled']['yaw']:
                 if abs(yaw_vel) > min_vel:
-                    angle_amplitude = yaw_vel * vel_coeffs['yaw']
+                    angle_amplitude = yaw_vel * vel_coeffs['yaw']  # Тот же знак, что и для углов
                 else:
                     angle_amplitude = yaw_dev * coeffs['yaw']
             else:
                 angle_amplitude = 0.0  # Явно устанавливаем 0.0 когда yaw выключен
             
-            rospy.loginfo(f"⚡ First step (velocity-based): roll_vel={roll_vel:.3f}, pitch_vel={pitch_vel:.3f}, yaw_vel={yaw_vel:.3f} rad/s")
+            rospy.loginfo(f"⚡ First step (velocity-based): roll_vel={roll_vel:.3f} (dev={roll_dev:.2f}°), pitch_vel={pitch_vel:.3f} (dev={pitch_dev:.2f}°), yaw_vel={yaw_vel:.3f} (dev={yaw_dev:.2f}°)")
         else:
             # Последующие шаги: используем отклонения углов
             # Roll: отклонение влево (положительное) -> движение влево (положительный Y)
