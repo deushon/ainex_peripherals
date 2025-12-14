@@ -46,6 +46,9 @@ SERIAL_MAX_CONSECUTIVE_ERRORS = 10  # Максимальное количест�
 # Инициализация
 INIT_Z_OFFSET = 0.025  # Начальное смещение по Z
 INIT_DELAY = 0.2  # Задержка после инициализации (сек)
+
+# Путь к action groups (относительно корня пакета)
+ACTION_GROUPS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'action_groups')
 # ===================================
 
 class ButtonState:
@@ -118,7 +121,23 @@ class JoystickController:
         # --- Hardware and ROS Initialization ---
         self.board = Board()
         self.gait_manager = GaitManager()
+        
+        # Инициализация MotionManager с путем к action groups из ноды
+        self.action_groups_dir = ACTION_GROUPS_DIR
+        if os.path.exists(self.action_groups_dir):
+            rospy.loginfo(f"Action groups directory: {self.action_groups_dir}")
+        else:
+            rospy.logwarn(f"Action groups directory not found: {self.action_groups_dir}. Creating it...")
+            os.makedirs(self.action_groups_dir, exist_ok=True)
+        
+        # Устанавливаем ROS параметр для MotionManager, если он его использует
+        rospy.set_param('~action_groups_path', self.action_groups_dir)
+        
         self.motion_manager = MotionManager()
+        
+        # Обертка для run_action с поддержкой путей из нашей ноды
+        self._original_run_action = self.motion_manager.run_action
+        self.motion_manager.run_action = self._run_action_with_local_path
         
         # --- State Variables ---
         self.status = 'stop'
@@ -400,6 +419,43 @@ class JoystickController:
 
         self.last_buttons = buttons
         self.last_axes = axes
+    
+    def _run_action_with_local_path(self, action_name):
+        """
+        Обертка для run_action, которая ищет action groups в локальной директории ноды.
+        
+        Args:
+            action_name: Имя action group
+        """
+        # Сначала пробуем найти в локальной директории action_groups
+        # Проверяем разные возможные расширения файлов (включая .d6a для action groups)
+        possible_extensions = ['.d6a', '', '.json', '.yaml', '.yml', '.txt']
+        local_action_path = None
+        
+        for ext in possible_extensions:
+            test_path = os.path.join(self.action_groups_dir, action_name + ext)
+            if os.path.exists(test_path):
+                local_action_path = test_path
+                break
+        
+        # Если файл существует в локальной директории, используем его
+        if local_action_path:
+            rospy.loginfo(f"Using local action group: {local_action_path}")
+            # Сохраняем текущую рабочую директорию
+            old_cwd = os.getcwd()
+            try:
+                # Переходим в директорию action_groups для загрузки
+                os.chdir(self.action_groups_dir)
+                # Вызываем оригинальный метод с именем (MotionManager будет искать в текущей директории)
+                return self._original_run_action(action_name)
+            finally:
+                # Восстанавливаем рабочую директорию
+                os.chdir(old_cwd)
+        else:
+            # Если файла нет в локальной директории, используем оригинальный метод
+            # MotionManager будет искать в стандартных местах
+            rospy.logdebug(f"Action group '{action_name}' not found in local directory ({self.action_groups_dir}), using default search")
+            return self._original_run_action(action_name)
     
     def _shutdown_handler(self):
         """Обработчик завершения работы - гарантирует остановку робота."""
