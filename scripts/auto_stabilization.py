@@ -45,6 +45,14 @@ REST_STABILIZATION_CONFIG = {
         'yaw': 30.0,
     },
     
+    # Активация по угловой скорости (для быстрой реакции)
+    'angular_velocity_enabled': True,  # Включить/выключить активацию по угловой скорости
+    'angular_velocity_thresholds': {  # Пороги угловой скорости (рад/с) - при превышении сразу активируется стабилизация
+        'roll': 0.3,   # Порог угловой скорости по roll (рад/с)
+        'pitch': 0.3,  # Порог угловой скорости по pitch (рад/с)
+        'yaw': 0.5,    # Порог угловой скорости по yaw (рад/с)
+    },
+    
     # Параметры для gait_manager при стабилизации (отдельные от джойстика)
     'gait_params': {
         'period_time': [300, 0.2, 0.022],  # [period_ms, x_swap, y_swap] - быстрые шаги
@@ -223,6 +231,12 @@ class AutoStabilization:
         pitch_deg = orientation.get('pitch_deg', 0)
         yaw_deg = orientation.get('yaw_deg', 0)
         
+        # Получаем угловую скорость
+        angular_velocity = imu_data.get('angular_velocity', {})
+        roll_vel = angular_velocity.get('x', 0)  # Угловая скорость по roll (рад/с)
+        pitch_vel = angular_velocity.get('y', 0)  # Угловая скорость по pitch (рад/с)
+        yaw_vel = angular_velocity.get('z', 0)   # Угловая скорость по yaw (рад/с)
+        
         current_time = rospy.get_time()
         state = self.rest_stabilization_state
         config = self.rest_config
@@ -264,7 +278,21 @@ class AutoStabilization:
             yaw_critical = critical['yaw']['left'] if yaw_dev > 0 else critical['yaw']['right']
             yaw_exceeded = abs(yaw_dev) > yaw_critical
         
-        needs_stabilization = roll_exceeded or pitch_exceeded or yaw_exceeded
+        # Проверяем угловую скорость (для быстрой реакции)
+        velocity_exceeded = False
+        if config.get('angular_velocity_enabled', True):
+            vel_thresholds = config.get('angular_velocity_thresholds', {})
+            if enabled['roll'] and abs(roll_vel) > vel_thresholds.get('roll', 0.3):
+                velocity_exceeded = True
+                rospy.logwarn(f"⚡ High angular velocity detected: roll_vel={roll_vel:.3f} rad/s (threshold: {vel_thresholds.get('roll', 0.3)})")
+            if enabled['pitch'] and abs(pitch_vel) > vel_thresholds.get('pitch', 0.3):
+                velocity_exceeded = True
+                rospy.logwarn(f"⚡ High angular velocity detected: pitch_vel={pitch_vel:.3f} rad/s (threshold: {vel_thresholds.get('pitch', 0.3)})")
+            if enabled['yaw'] and abs(yaw_vel) > vel_thresholds.get('yaw', 0.5):
+                velocity_exceeded = True
+                rospy.logwarn(f"⚡ High angular velocity detected: yaw_vel={yaw_vel:.3f} rad/s (threshold: {vel_thresholds.get('yaw', 0.5)})")
+        
+        needs_stabilization = roll_exceeded or pitch_exceeded or yaw_exceeded or velocity_exceeded
         
         # Обрабатываем возврат
         if config['return_enabled'] and state['return_pending']:
@@ -277,6 +305,7 @@ class AutoStabilization:
                 return self._execute_return()
         
         # Проверяем стабильность (только по включенным осям)
+        # Также проверяем угловую скорость - если она высокая, робот еще нестабилен
         stable = config['stable_threshold']
         is_stable = True
         if enabled['roll']:
@@ -286,10 +315,30 @@ class AutoStabilization:
         if enabled['yaw']:
             is_stable = is_stable and abs(yaw_dev) < stable['yaw']
         
+        # Если угловая скорость высокая, робот еще нестабилен (даже если углы в норме)
+        if config.get('angular_velocity_enabled', True):
+            vel_thresholds = config.get('angular_velocity_thresholds', {})
+            if enabled['roll'] and abs(roll_vel) > vel_thresholds.get('roll', 0.3):
+                is_stable = False
+            if enabled['pitch'] and abs(pitch_vel) > vel_thresholds.get('pitch', 0.3):
+                is_stable = False
+            if enabled['yaw'] and abs(yaw_vel) > vel_thresholds.get('yaw', 0.5):
+                is_stable = False
+        
         if needs_stabilization:
             # Активируем стабилизацию
             if not state['stabilization_active']:
-                rospy.logwarn(f"⚠️ Stabilization started: roll_dev={roll_dev:.2f}°, pitch_dev={pitch_dev:.2f}°, yaw_dev={yaw_dev:.2f}°")
+                reason = []
+                if roll_exceeded:
+                    reason.append(f"roll_dev={roll_dev:.2f}°")
+                if pitch_exceeded:
+                    reason.append(f"pitch_dev={pitch_dev:.2f}°")
+                if yaw_exceeded:
+                    reason.append(f"yaw_dev={yaw_dev:.2f}°")
+                if velocity_exceeded:
+                    reason.append(f"angular_vel: roll={roll_vel:.3f}, pitch={pitch_vel:.3f}, yaw={yaw_vel:.3f} rad/s")
+                
+                rospy.logwarn(f"⚠️ Stabilization started: {', '.join(reason)}")
                 state['stabilization_active'] = True
                 state['movement_history'] = []
             
