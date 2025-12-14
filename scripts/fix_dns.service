@@ -1,0 +1,14 @@
+[Unit]
+Description=Fix DNS Configuration
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/ros_ws/src/ainex_peripherals/scripts/fix_dns.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
