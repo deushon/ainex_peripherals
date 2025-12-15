@@ -470,9 +470,9 @@ class AutoStabilization:
             # pitch_dev < 0 (наклон вперед) -> x > 0 (шаг вперед) -> x = -pitch_dev * coeff
             # Для угловой скорости: pitch_vel < 0 (падение вперед) -> x > 0 (шаг вперед) -> x = -pitch_vel * vel_coeff
             if abs(pitch_vel) > min_vel:
-                x_amplitude = -pitch_vel * vel_coeffs['pitch']  # Тот же знак, что и для углов
+                x_amplitude = pitch_vel * vel_coeffs['pitch']  # Тот же знак, что и для углов
             else:
-                x_amplitude = -pitch_dev * coeffs['pitch']
+                x_amplitude = pitch_dev * coeffs['pitch']
             
             # YAW: используем угловую скорость с той же логикой знаков, что и для углов
             # yaw_dev > 0 (отклонение влево) -> angle > 0 (поворот влево) -> angle = yaw_dev * coeff
@@ -492,7 +492,7 @@ class AutoStabilization:
             y_amplitude = roll_dev * coeffs['roll']
             
             # Pitch: отклонение вперед (отрицательное) -> движение вперед (положительный X)
-            x_amplitude = -pitch_dev * coeffs['pitch']
+            x_amplitude = pitch_dev * coeffs['pitch']
             
             # YAW: отклонение влево (положительное) -> поворот влево (положительный угол)
             if config['stabilization_enabled']['yaw']:
@@ -640,7 +640,7 @@ class AutoStabilization:
         #        наклон вперед (pitch < 90) -> шаг вперед (положительный X)
         #        наклон назад (pitch > 90) -> шаг назад (отрицательный X)
         pitch_deviation = pitch_deg - 90.0
-        x_amplitude = -pitch_deviation * coeffs['pitch']  # Отрицательный, так как наклон вперед требует шага вперед
+        x_amplitude = pitch_deviation * coeffs['pitch']  # Отрицательный, так как наклон вперед требует шага вперед
         x_amplitude = max(-max_amps['x'], min(max_amps['x'], x_amplitude))
         
         # Угол поворота не используем для стабилизации наклона (только для YAW стабилизации)
