@@ -36,6 +36,7 @@ import subprocess
 import math
 import time
 from ainex_sdk import Board
+from std_msgs.msg import Bool
 
 # Константы состояний кнопок (совместимость с ButtonState из joystick_control.py)
 BUTTON_PRESSED = 1
@@ -48,7 +49,7 @@ class ButtonActions:
     """
     
     def __init__(self, board, gait_manager, speed_control, motion_manager, 
-                 game_services, serial_getter, robot_state_getter):
+                 game_services, serial_getter, robot_state_getter, firing_state_pub=None):
         """
         Инициализация модуля действий кнопок.
         
@@ -60,6 +61,7 @@ class ButtonActions:
             game_services: Экземпляр GameServices
             serial_getter: Функция для получения serial порта
             robot_state_getter: Функция для получения состояния робота
+            firing_state_pub: Публикатор состояния стрельбы (опционально)
         """
         self.board = board
         self.gait_manager = gait_manager
@@ -68,6 +70,7 @@ class ButtonActions:
         self.game_services = game_services
         self.get_serial_port = serial_getter
         self.get_robot_state = robot_state_getter
+        self.firing_state_pub = firing_state_pub
         
         # Звук для кнопки X
         self.sound = None
@@ -117,9 +120,20 @@ class ButtonActions:
         
         try:
             if new_state == BUTTON_PRESSED:
+                # Публикуем состояние стрельбы СРАЗУ (до отправки команды в Arduino)
+                # Это важно для backend, который валидирует попадания
+                if self.firing_state_pub is not None:
+                    firing_msg = Bool()
+                    firing_msg.data = True
+                    self.firing_state_pub.publish(firing_msg)
                 ser.write(b"FIRE\n")
                 rospy.loginfo("Firing started")
             elif new_state == BUTTON_RELEASED:
+                # Публикуем состояние стрельбы СРАЗУ (до отправки команды в Arduino)
+                if self.firing_state_pub is not None:
+                    firing_msg = Bool()
+                    firing_msg.data = False
+                    self.firing_state_pub.publish(firing_msg)
                 ser.write(b"STOP\n")
                 rospy.loginfo("Firing stopped")
         except serial.SerialException as e:

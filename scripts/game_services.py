@@ -44,11 +44,11 @@ class GameServices:
         self.is_locked = False  # Legacy флаг
         
         # Публикаторы
-        self.hp_pub = rospy.Publisher('/game/hp', Int32, queue_size=10)
+        self.hp_pub = rospy.Publisher('/game/robot_hp', Int32, queue_size=10)
         self.robot_status_pub = rospy.Publisher('/game/robot_status', String, queue_size=10)
         
         # Подписчики
-        self.damage_sub = rospy.Subscriber('/game/damage', Int32, self.damage_callback)
+        self.damage_sub = rospy.Subscriber('/game/validated_damage', Int32, self.damage_callback)
         self.control_permissions_sub = rospy.Subscriber('/game/control_permissions', String, self.control_permissions_callback)
         self.control_lock_sub = rospy.Subscriber('/game/control_lock', Bool, self.control_lock_callback)
         self.match_start_sub = rospy.Subscriber('/game/match_start', Bool, self.match_start_callback)

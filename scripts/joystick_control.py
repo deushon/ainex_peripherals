@@ -177,6 +177,10 @@ class JoystickController:
         )
         # Устанавливаем ссылку на auto_stabilization в speed_control для применения корректировок
         self.speed_control.set_auto_stabilization(self.auto_stabilization)
+        
+        # Создаем публикаторы для игры (нужны для button_actions)
+        self.firing_state_pub = rospy.Publisher('/game/firing_state', Bool, queue_size=10)
+        
         self.button_actions = ButtonActions(
             self.board,
             self.gait_manager,
@@ -184,7 +188,8 @@ class JoystickController:
             self.motion_manager,
             self.game_services,
             self.get_serial_port,
-            lambda: self.imu_handler.get_robot_state()
+            lambda: self.imu_handler.get_robot_state(),
+            self.firing_state_pub
         )
         
         # --- Setup Serial and Game Features ---
@@ -204,7 +209,7 @@ class JoystickController:
         
         # Публикаторы для игры
         self.hit_detection_pub = rospy.Publisher('/game/hit_detection', String, queue_size=10)
-        self.firing_state_pub = rospy.Publisher('/game/firing_state', Bool, queue_size=10)
+        # firing_state_pub уже создан в __init__ перед button_actions
         
         # Инициализация потока чтения serial
         self.serial_reader_thread = SerialReader(self.get_serial_port, self.hit_detection_pub, self.robot_id)

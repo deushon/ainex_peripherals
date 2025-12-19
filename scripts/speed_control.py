@@ -61,7 +61,7 @@ class SpeedControl:
         """
         return {
             1: {
-                'period_time': [500, 0.2, 0.022],  # Медленный режим
+                'period_time': [400, 0.23, 0.030],  # Медленный режим
                 'x_amp': 0.01,
                 'y_amp': 0.015,
                 'angle_amp': 8,
@@ -71,7 +71,7 @@ class SpeedControl:
                     'step_fb_ratio': 0.030,  # Дистанция шага
                     'y_swap_amplitude': 0.02,
                     'z_swap_amplitude': 0.006,
-                    'init_y_offset': -0.005,
+                    'init_y_offset': -0.015,
                     'init_roll_offset': 0.0,
                     'init_pitch_offset': 0.0
                 }
