@@ -61,19 +61,23 @@ class SpeedControl:
         """
         return {
             1: {
-                'period_time': [400, 0.23, 0.030],  # Медленный режим
-                'x_amp': 0.01,
-                'y_amp': 0.015,
-                'angle_amp': 8,
-                'z_move_amplitude': 0.025,
+                'period_time': [300.0, 0.1, 0.05],  # Медленный режим
+                'x_amp': 0.015,
+                'y_amp': 0.003,
+                'angle_amp': 0.003,
+                'hip_pitch_offset': 5.0,
+                'z_move_amplitude': 0.04,
+                'arm_swap': 60.0,
                 'gait_base': {
-                    'dsp_ratio': 0.25,  # Больше стабильности
-                    'step_fb_ratio': 0.030,  # Дистанция шага
-                    'y_swap_amplitude': 0.02,
-                    'z_swap_amplitude': 0.006,
-                    'init_y_offset': -0.015,
+                    'dsp_ratio': 0.3,  # Больше стабильности
+                    'step_fb_ratio': 0.3,  # Дистанция шага
+                    'y_swap_amplitude': 0.01,
+                    'z_swap_amplitude': 0.015,
+                    'init_y_offset': 0.0,
+                    'init_x_offset': -0.02,
+                    'init_z_offset': 0.04,
                     'init_roll_offset': 0.0,
-                    'init_pitch_offset': 0.0
+                    'init_pitch_offset': 10.0
                 }
             },
             2: {
