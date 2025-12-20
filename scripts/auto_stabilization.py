@@ -162,7 +162,58 @@ REST_STABILIZATION_CONFIG = {
 
 # ========== КОНФИГУРАЦИЯ: СТАБИЛИЗАЦИЯ ПРИ ХОДЬБЕ ==========
 WALKING_STABILIZATION_CONFIG = {
-    # Конфигурация будет добавлена при перестройке с новыми параметрами IMU
+    # Включение/выключение стабилизации при ходьбе
+    'enabled': True,  # Глобальное включение/выключение PID стабилизации
+    
+    # PID параметры для удержания вертикального положения туловища
+    'pid': {
+        'roll': {
+            'enabled': True,  # Включить/выключить стабилизацию по roll
+            'kp': 0.01,       # Пропорциональный коэффициент (м/градус)
+            'ki': 0.001,      # Интегральный коэффициент
+            'kd': 0.005,      # Дифференциальный коэффициент
+            'max_output': 0.02,  # Максимальное смещение по Y (м)
+            'target': 0.0,    # Целевой угол roll (градусы) - вертикально
+            'integral_limit': 10.0,  # Лимит интегральной составляющей (anti-windup)
+        },
+        'pitch': {
+            'enabled': True,  # Включить/выключить стабилизацию по pitch
+            'kp': 0.01,       # Пропорциональный коэффициент (м/градус)
+            'ki': 0.001,      # Интегральный коэффициент
+            'kd': 0.005,      # Дифференциальный коэффициент
+            'max_output': 0.02,  # Максимальное смещение по X (м)
+            'target': 90.0,   # Целевой угол pitch (градусы) - вертикально
+            'integral_limit': 10.0,  # Лимит интегральной составляющей (anti-windup)
+        },
+    },
+    
+    # Пороги активации (не реагируем на мелкие отклонения)
+    'activation_threshold': {
+        'roll': 2.0,   # Минимальное отклонение для активации (градусы)
+        'pitch': 2.0,  # Минимальное отклонение для активации (градусы)
+    },
+    
+    # Ограничения на смещения туловища (безопасные пределы)
+    'limits': {
+        'init_x_offset': {'min': -0.03, 'max': 0.03},  # м
+        'init_y_offset': {'min': -0.03, 'max': 0.03},  # м
+        'init_roll_offset': {'min': -5.0, 'max': 5.0},  # градусы
+        'init_pitch_offset': {'min': -5.0, 'max': 5.0},  # градусы
+    },
+    
+    # Коэффициенты для преобразования PID выхода в смещения туловища
+    'correction_ratios': {
+        'roll_to_y_offset': 1.0,      # Коэффициент для init_y_offset от roll PID
+        'roll_to_roll_offset': 0.5,   # Коэффициент для init_roll_offset от roll PID
+        'pitch_to_x_offset': 1.0,     # Коэффициент для init_x_offset от pitch PID
+        'pitch_to_pitch_offset': 0.5, # Коэффициент для init_pitch_offset от pitch PID
+    },
+    
+    # Фильтрация данных IMU (для уменьшения шума)
+    'filter': {
+        'enabled': True,
+        'alpha': 0.7,  # Коэффициент фильтрации (0-1), больше = меньше фильтрации
+    },
 }
 
 # ========== ОБЩИЕ ПАРАМЕТРЫ ==========
@@ -187,6 +238,15 @@ class AutoStabilization:
         self.enabled = False
         self.rest_enabled = True
         self.walking_enabled = True
+        
+        # Состояние стабилизации при ходьбе (PID регулятор)
+        self.walking_stabilization_state = {
+            'last_imu_data': None,  # Последние данные IMU
+            'last_time': None,      # Время последнего обновления
+            'integral': {'roll': 0.0, 'pitch': 0.0},  # Интегральная составляющая PID
+            'last_error': {'roll': 0.0, 'pitch': 0.0},  # Последняя ошибка для дифференциальной составляющей
+            'filtered_orientation': {'roll': 0.0, 'pitch': 90.0},  # Отфильтрованная ориентация
+        }
         
         # Состояние стабилизации в покое
         self.rest_stabilization_state = {
@@ -257,6 +317,8 @@ class AutoStabilization:
             )
         elif status == 'move' and self.walking_enabled:
             self._process_walking_stabilization(imu_data)
+            # Сохраняем последние данные IMU для использования в apply_walking_corrections
+            self.walking_stabilization_state['last_imu_data'] = imu_data
         
         return rest_step_executed
     
@@ -1090,28 +1152,244 @@ class AutoStabilization:
     
     def apply_walking_corrections(self, gait_param, period_time):
         """
-        Применяет корректировки стабилизации при ходьбе к параметрам походки.
+        Применяет PID-корректировки для удержания вертикального положения туловища.
+        Меняет только смещения туловища (init_x_offset, init_y_offset, init_roll_offset, init_pitch_offset),
+        НЕ трогая базовые параметры походки (period_time, dsp_ratio, y_swap_amplitude, step_fb_ratio и т.д.).
+        
         Вызывается из speed_control.process_axes ПОСЛЕ установки базовых параметров.
         
         Args:
             gait_param: Словарь параметров походки (будет изменен)
-            period_time: Список [period_time, dsp_ratio, y_swap_amplitude] (может быть изменен)
+            period_time: Список [period_time, dsp_ratio, y_swap_amplitude] (не изменяется)
         
         Returns:
             bool: True если были применены корректировки
         """
-        # TODO: Перестроить с учетом новых параметров IMU
-        return False
+        config = self.walking_config
+        
+        # Проверяем, включена ли стабилизация
+        if not config.get('enabled', True):
+            return False
+        
+        # Получаем последние данные IMU
+        imu_data = self.walking_stabilization_state.get('last_imu_data')
+        if not imu_data:
+            return False
+        
+        orientation = imu_data.get('orientation', {})
+        angular_velocity = imu_data.get('angular_velocity', {})
+        
+        if not orientation:
+            return False
+        
+        roll_deg = orientation.get('roll_deg', 0)
+        pitch_deg = orientation.get('pitch_deg', 0)
+        
+        # Применяем фильтрацию, если включена
+        if config['filter']['enabled']:
+            alpha = config['filter']['alpha']
+            state = self.walking_stabilization_state
+            state['filtered_orientation']['roll'] = alpha * state['filtered_orientation']['roll'] + (1 - alpha) * roll_deg
+            state['filtered_orientation']['pitch'] = alpha * state['filtered_orientation']['pitch'] + (1 - alpha) * pitch_deg
+            roll_deg = state['filtered_orientation']['roll']
+            pitch_deg = state['filtered_orientation']['pitch']
+        
+        # Вычисляем ошибки относительно целевых углов
+        roll_error = roll_deg - config['pid']['roll']['target']
+        pitch_error = pitch_deg - config['pid']['pitch']['target']
+        
+        # Проверяем пороги активации
+        if abs(roll_error) < config['activation_threshold']['roll'] and \
+           abs(pitch_error) < config['activation_threshold']['pitch']:
+            # Отклонения малы, сбрасываем интегральную составляющую
+            self.walking_stabilization_state['integral'] = {'roll': 0.0, 'pitch': 0.0}
+            return False
+        
+        # Вычисляем dt для интегральной и дифференциальной составляющих
+        current_time = rospy.get_time()
+        last_time = self.walking_stabilization_state.get('last_time')
+        dt = current_time - last_time if last_time else 0.02  # ~50Hz по умолчанию
+        dt = max(0.001, min(0.1, dt))  # Ограничиваем dt разумными пределами
+        self.walking_stabilization_state['last_time'] = current_time
+        
+        # Получаем угловые скорости для дифференциальной составляющей
+        roll_vel = angular_velocity.get('x', 0) * 180.0 / math.pi  # рад/с -> град/с
+        pitch_vel = angular_velocity.get('y', 0) * 180.0 / math.pi
+        
+        # Вычисляем PID выходы
+        roll_pid_output = 0.0
+        pitch_pid_output = 0.0
+        
+        if config['pid']['roll']['enabled']:
+            roll_pid_output = self._calculate_pid(
+                error=roll_error,
+                integral=self.walking_stabilization_state['integral']['roll'],
+                derivative=roll_vel,
+                dt=dt,
+                config=config['pid']['roll']
+            )
+            # Обновляем интегральную составляющую
+            self.walking_stabilization_state['integral']['roll'] += roll_error * dt
+            # Ограничиваем интегральную составляющую (anti-windup)
+            max_integral = config['pid']['roll']['integral_limit']
+            self.walking_stabilization_state['integral']['roll'] = max(-max_integral, min(max_integral, self.walking_stabilization_state['integral']['roll']))
+        
+        if config['pid']['pitch']['enabled']:
+            pitch_pid_output = self._calculate_pid(
+                error=pitch_error,
+                integral=self.walking_stabilization_state['integral']['pitch'],
+                derivative=pitch_vel,
+                dt=dt,
+                config=config['pid']['pitch']
+            )
+            # Обновляем интегральную составляющую
+            self.walking_stabilization_state['integral']['pitch'] += pitch_error * dt
+            # Ограничиваем интегральную составляющую (anti-windup)
+            max_integral = config['pid']['pitch']['integral_limit']
+            self.walking_stabilization_state['integral']['pitch'] = max(-max_integral, min(max_integral, self.walking_stabilization_state['integral']['pitch']))
+        
+        # Применяем корректировки к gait_param
+        # Roll: смещаем туловище влево/вправо и добавляем крен
+        limits = config['limits']
+        ratios = config['correction_ratios']
+        
+        # Получаем текущие значения или используем базовые
+        current_y_offset = gait_param.get('init_y_offset', 0)
+        current_x_offset = gait_param.get('init_x_offset', 0)
+        current_roll_offset = gait_param.get('init_roll_offset', 0)
+        current_pitch_offset = gait_param.get('init_pitch_offset', 0)
+        
+        # Применяем корректировки roll
+        if config['pid']['roll']['enabled'] and abs(roll_pid_output) > 0.001:
+            y_correction = roll_pid_output * ratios['roll_to_y_offset']
+            roll_correction = roll_pid_output * ratios['roll_to_roll_offset']
+            
+            gait_param['init_y_offset'] = max(
+                limits['init_y_offset']['min'],
+                min(limits['init_y_offset']['max'], current_y_offset + y_correction)
+            )
+            gait_param['init_roll_offset'] = max(
+                limits['init_roll_offset']['min'],
+                min(limits['init_roll_offset']['max'], current_roll_offset + roll_correction)
+            )
+        
+        # Применяем корректировки pitch
+        if config['pid']['pitch']['enabled'] and abs(pitch_pid_output) > 0.001:
+            x_correction = pitch_pid_output * ratios['pitch_to_x_offset']
+            pitch_correction = pitch_pid_output * ratios['pitch_to_pitch_offset']
+            
+            gait_param['init_x_offset'] = max(
+                limits['init_x_offset']['min'],
+                min(limits['init_x_offset']['max'], current_x_offset + x_correction)
+            )
+            gait_param['init_pitch_offset'] = max(
+                limits['init_pitch_offset']['min'],
+                min(limits['init_pitch_offset']['max'], current_pitch_offset + pitch_correction)
+            )
+        
+        return True
+    
+    def _calculate_pid(self, error, integral, derivative, dt, config):
+        """
+        Вычисляет выход PID контроллера.
+        
+        Args:
+            error: Текущая ошибка
+            integral: Интегральная составляющая
+            derivative: Производная (угловая скорость)
+            dt: Интервал времени
+            config: Конфигурация PID (kp, ki, kd, max_output)
+        
+        Returns:
+            float: Выход PID контроллера (ограничен max_output)
+        """
+        # P компонента
+        p_term = config['kp'] * error
+        
+        # I компонента
+        i_term = config['ki'] * integral
+        
+        # D компонента (используем производную от угловой скорости)
+        d_term = config['kd'] * derivative
+        
+        # Суммируем и ограничиваем
+        output = p_term + i_term + d_term
+        return max(-config['max_output'], min(config['max_output'], output))
     
     def reset_walking_corrections(self):
         """
-        Сбрасывает корректировки стабилизации при ходьбе.
+        Сбрасывает состояние PID регулятора стабилизации при ходьбе.
         Вызывается при остановке движения для возврата к базовым параметрам.
         """
-        # TODO: Реализовать при перестройке
-        pass
+        # Сбрасываем интегральную составляющую и состояние
+        self.walking_stabilization_state['integral'] = {'roll': 0.0, 'pitch': 0.0}
+        self.walking_stabilization_state['last_error'] = {'roll': 0.0, 'pitch': 0.0}
+        self.walking_stabilization_state['last_time'] = None
+        # Не сбрасываем last_imu_data, так как она может быть полезна при следующем движении
     
     def reset(self):
         """Сбрасывает состояние стабилизации."""
         self._reset_rest_stabilization_state()
         self.reset_walking_corrections()
+    
+    def set_walking_stabilization_enabled(self, enabled):
+        """
+        Включает/выключает стабилизацию при ходьбе (PID регулятор).
+        
+        Args:
+            enabled: True для включения, False для выключения
+        """
+        self.walking_config['enabled'] = enabled
+        if not enabled:
+            self.reset_walking_corrections()
+        rospy.loginfo(f"Walking stabilization PID: {'enabled' if enabled else 'disabled'}")
+    
+    def set_walking_pid_enabled(self, axis, enabled):
+        """
+        Включает/выключает PID стабилизацию для конкретной оси.
+        
+        Args:
+            axis: 'roll' или 'pitch'
+            enabled: True для включения, False для выключения
+        """
+        if axis in ['roll', 'pitch']:
+            self.walking_config['pid'][axis]['enabled'] = enabled
+            if not enabled:
+                self.walking_stabilization_state['integral'][axis] = 0.0
+            rospy.loginfo(f"Walking PID {axis}: {'enabled' if enabled else 'disabled'}")
+    
+    def set_walking_pid_params(self, axis, kp=None, ki=None, kd=None, max_output=None):
+        """
+        Устанавливает параметры PID для конкретной оси.
+        
+        Args:
+            axis: 'roll' или 'pitch'
+            kp: Пропорциональный коэффициент (опционально)
+            ki: Интегральный коэффициент (опционально)
+            kd: Дифференциальный коэффициент (опционально)
+            max_output: Максимальный выход (опционально)
+        """
+        if axis not in ['roll', 'pitch']:
+            return
+        
+        if kp is not None:
+            self.walking_config['pid'][axis]['kp'] = kp
+        if ki is not None:
+            self.walking_config['pid'][axis]['ki'] = ki
+        if kd is not None:
+            self.walking_config['pid'][axis]['kd'] = kd
+        if max_output is not None:
+            self.walking_config['pid'][axis]['max_output'] = max_output
+        
+        rospy.loginfo(f"Walking PID {axis} params updated: kp={self.walking_config['pid'][axis]['kp']}, "
+                     f"ki={self.walking_config['pid'][axis]['ki']}, kd={self.walking_config['pid'][axis]['kd']}, "
+                     f"max_output={self.walking_config['pid'][axis]['max_output']}")
+    
+    def get_walking_stabilization_config(self):
+        """
+        Возвращает текущую конфигурацию стабилизации при ходьбе.
+        
+        Returns:
+            dict: Копия конфигурации
+        """
+        return self.walking_config.copy()

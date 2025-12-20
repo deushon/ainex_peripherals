@@ -55,61 +55,91 @@ class SpeedControl:
     def _setup_speed_parameters(self):
         """
         Инициализирует словарь с параметрами для каждого режима скорости.
-        Только 3 режима: 1 (медленный), 2 (средний), 3 (быстрый).
-        Эти параметры задают начальные значения, которые могут быть переопределены
-        стабилизацией при ходьбе только в меньшую сторону (для большей стабильности).
+        Режимы основаны на пресетах App Speed (1-4):
+        - 1: Very Low Speed (самая медленная, period_time=600ms)
+        - 2: Low Speed (period_time=500ms)
+        - 3: Medium Speed (period_time=400ms)
+        - 4: High Speed (самая быстрая, period_time=300ms)
+        
+        Параметры соответствуют базовым пресетам из ainex_controller.py (set_app_walking_param_callback).
+        ВАЖНО: dsp_ratio и y_swap_amplitude находятся в period_time[1] и period_time[2],
+        они передаются напрямую через period_time в gait_manager.set_step().
         """
         return {
             1: {
-                'period_time': [300.0, 0.1, 0.05],  # Медленный режим
-                'x_amp': 0.015,
-                'y_amp': 0.003,
-                'angle_amp': 0.003,
-                'hip_pitch_offset': 5.0,
-                'z_move_amplitude': 0.04,
-                'arm_swap': 60.0,
+                # Very Low Speed - самая медленная и стабильная
+                'period_time': [600, 0.2, 0.02],  # [period_ms, dsp_ratio, y_swap_amplitude]
+                'x_amp': 0.01,   # Ограничивается до ±0.01 или ±0.015 в зависимости от направления
+                'y_amp': 0.01,   # Ограничивается до ±0.01 или ±0.012 в зависимости от направления
+                'angle_amp': 10,  # Ограничивается до ±10 градусов
+                'z_move_amplitude': 0.02,
+                'arm_swap': 30.0,  # arm_swing_gain = 0.5 радиан ≈ 30 градусов
                 'gait_base': {
-                    'dsp_ratio': 0.3,  # Больше стабильности
-                    'step_fb_ratio': 0.3,  # Дистанция шага
-                    'y_swap_amplitude': 0.01,
-                    'z_swap_amplitude': 0.015,
-                    'init_y_offset': 0.0,
-                    'init_x_offset': -0.02,
-                    'init_z_offset': 0.04,
-                    'init_roll_offset': 0.0,
-                    'init_pitch_offset': 10.0
+                    'step_fb_ratio': 0.028,
+                    'z_swap_amplitude': 0.006,
+                    'init_y_offset': -0.008,  # Может меняться до 0 в зависимости от движения
+                    'init_x_offset': 0.0,
+                    'init_roll_offset': 0.0,  # Может меняться до 3-5 в зависимости от движения
+                    'init_pitch_offset': 0.0,
+                    'hip_pitch_offset': 15.0,
+                    'pelvis_offset': 5.0
                 }
             },
             2: {
-                'period_time': [400, 0.2, 0.028],  # Средний режим
-                'x_amp': 0.015,
-                'y_amp': 0.015,
-                'angle_amp': 10,
+                # Low Speed
+                'period_time': [500, 0.2, 0.02],  # [period_ms, dsp_ratio, y_swap_amplitude]
+                'x_amp': 0.01,   # Ограничивается до ±0.01 или ±0.015
+                'y_amp': 0.01,   # Ограничивается до ±0.01 или ±0.015
+                'angle_amp': 10,  # Ограничивается до ±10 градусов
                 'z_move_amplitude': 0.02,
+                'arm_swap': 30.0,
                 'gait_base': {
-                    'dsp_ratio': 0.2,
-                    'step_fb_ratio': 0.028,  # Дистанция шага
-                    'y_swap_amplitude': 0.02,
+                    'step_fb_ratio': 0.028,
                     'z_swap_amplitude': 0.006,
-                    'init_y_offset': -0.005,
-                    'init_roll_offset': 0.0,
-                    'init_pitch_offset': 0.0
+                    'init_y_offset': -0.008,  # Может меняться до -0.005
+                    'init_x_offset': 0.0,
+                    'init_roll_offset': 0.0,  # Может меняться до 3
+                    'init_pitch_offset': 0.0,
+                    'hip_pitch_offset': 15.0,
+                    'pelvis_offset': 5.0
                 }
             },
             3: {
-                'period_time': [300, 0.2, 0.028],  # Быстрый режим
-                'x_amp': 0.01,
-                'y_amp': 0.015,
-                'angle_amp': 10,
-                'z_move_amplitude': 0.015,
+                # Medium Speed
+                'period_time': [400, 0.2, 0.02],  # [period_ms, dsp_ratio, y_swap_amplitude]
+                'x_amp': 0.01,   # Ограничивается до ±0.01
+                'y_amp': 0.01,   # Ограничивается до ±0.01 или ±0.015
+                'angle_amp': 8,   # Ограничивается до ±8 или ±10 градусов
+                'z_move_amplitude': 0.02,
+                'arm_swap': 30.0,
                 'gait_base': {
-                    'dsp_ratio': 0.18,  # Меньше стабильности, но быстрее
-                    'step_fb_ratio': 0.025,  # Дистанция шага
-                    'y_swap_amplitude': 0.021,
+                    'step_fb_ratio': 0.028,
+                    'z_swap_amplitude': 0.006,
+                    'init_y_offset': -0.005,  # Может меняться до 0
+                    'init_x_offset': 0.0,
+                    'init_roll_offset': 0.0,  # Может меняться до 3
+                    'init_pitch_offset': 0.0,
+                    'hip_pitch_offset': 15.0,
+                    'pelvis_offset': 5.0
+                }
+            },
+            4: {
+                # High Speed - самая быстрая
+                'period_time': [300, 0.2, 0.021],  # [period_ms, dsp_ratio, y_swap_amplitude]
+                'x_amp': 0.01,   # Ограничивается до ±0.01
+                'y_amp': 0.01,   # Ограничивается до ±0.01 или ±0.015
+                'angle_amp': 8,   # Ограничивается до ±8 градусов
+                'z_move_amplitude': 0.015,
+                'arm_swap': 30.0,
+                'gait_base': {
+                    'step_fb_ratio': 0.028,
                     'z_swap_amplitude': 0.006,
                     'init_y_offset': -0.008,
-                    'init_roll_offset': 0.0,
-                    'init_pitch_offset': 0.0
+                    'init_x_offset': 0.0,
+                    'init_roll_offset': 0.0,  # Может меняться до -3 или -1.0
+                    'init_pitch_offset': 0.0,
+                    'hip_pitch_offset': 15.0,
+                    'pelvis_offset': 5.0
                 }
             }
         }
@@ -134,8 +164,8 @@ class SpeedControl:
         height = max(HEIGHT_MIN, min(HEIGHT_MAX, height))
         gait_param = self.gait_manager.get_gait_param()
         gait_param['body_height'] = height
-        # Обновляем параметры без движения
-        params = self.speed_params[1]  # Используем параметры режима 1 для высоты
+        # Обновляем параметры без движения, используем текущий режим скорости
+        params = self.speed_params[self.speed_mode]
         self.gait_manager.update_param(
             params['period_time'],
             0, 0, 0,
@@ -268,14 +298,19 @@ class SpeedControl:
         Устанавливает режим скорости.
         
         Args:
-            mode: Режим скорости (1-3): 1=медленный, 2=средний, 3=быстрый
+            mode: Режим скорости (1-4): 
+                  1=Very Low Speed (самая медленная, period_time=600ms)
+                  2=Low Speed (period_time=500ms)
+                  3=Medium Speed (period_time=400ms)
+                  4=High Speed (самая быстрая, period_time=300ms)
         
         Returns:
             bool: True если режим установлен успешно
         """
-        if 1 <= mode <= 3:
+        if 1 <= mode <= 4:
             self.speed_mode = mode
-            rospy.loginfo(f"Speed mode set to: {self.speed_mode}")
+            speed_names = {1: "Very Low", 2: "Low", 3: "Medium", 4: "High"}
+            rospy.loginfo(f"Speed mode set to: {self.speed_mode} ({speed_names[mode]} Speed)")
             return True
         return False
     
