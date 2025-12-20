@@ -310,17 +310,16 @@ class JoystickController:
         
         # Обновление автостабилизации
         # ВАЖНО: Вызываем process() всегда (не только когда стоит), чтобы стабилизация могла остановить движение при падении
-        if self.auto_stabilization.enabled:
-            # Обрабатываем стабилизацию с новыми данными IMU
-            # process() сам проверит состояние робота и остановит движение при падении
-            self.auto_stabilization.process(
-                imu_data,
-                self.imu_handler.get_robot_state(),
-                self.status,
-                self.x_move_amplitude,
-                self.y_move_amplitude,
-                self.angle_move_amplitude
-            )
+        # process() сам проверит self.enabled внутри и вернет False раньше, если модуль выключен
+        # Это позволяет логам работать и показывать, почему PID не работает
+        self.auto_stabilization.process(
+            imu_data,
+            self.imu_handler.get_robot_state(),
+            self.status,
+            self.x_move_amplitude,
+            self.y_move_amplitude,
+            self.angle_move_amplitude
+        )
         
         # Проверка автоматического подъема
         if self.imu_handler.auto_getup_enabled:

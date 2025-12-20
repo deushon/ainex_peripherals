@@ -24,7 +24,10 @@ REST_STABILIZATION_CONFIG = {
     },
     'reference_auto_delay': 3.0,  # Задержка перед сбором эталона (сек)
     
-    # Включение/выключение стабилизации по осям
+    # Включение/выключение шаговой стабилизации (выполнение шагов для баланса)
+    'step_stabilization_enabled': False,  # Включить/выключить шаговую стабилизацию в покое
+    
+    # Включение/выключение стабилизации по осям (для шаговой стабилизации)
     'stabilization_enabled': {
         'roll': True,   # Стабилизация по крену (влево/вправо)
         'pitch': True,  # Стабилизация по тангажу (вперед/назад)
@@ -158,6 +161,60 @@ REST_STABILIZATION_CONFIG = {
     # Параметр возврата
     'return_enabled': False,  # Включить/выключить возврат после стабилизации
     'return_delay': 0.5,      # Задержка перед началом возврата (сек)
+    
+    # PID регулятор для стабилизации в покое (корректировка смещений туловища без шагов)
+    'pid_enabled': True,  # Включить/выключить PID стабилизацию в покое
+    'pid': {
+        'roll': {
+            'enabled': True,  # Включить/выключить стабилизацию по roll
+            'kp': 0.0000001,      # Пропорциональный коэффициент (м/градус) - меньше чем при ходьбе
+            'ki': 0.00000005,     # Интегральный коэффициент
+            'kd': 0.00008,      # Дифференциальный коэффициент
+            'max_output': 0.015,  # Максимальное смещение по Y (м) - меньше чем при ходьбе
+            'target': 0.0,    # Целевой угол roll (градусы) - вертикально
+            'integral_limit': 8.0,  # Лимит интегральной составляющей (anti-windup)
+        },
+        'pitch': {
+            'enabled': True,  # Включить/выключить стабилизацию по pitch
+            'kp': 0.0000001,      # Пропорциональный коэффициент (м/градус)
+            'ki': 0.00000005,     # Интегральный коэффициент
+            'kd': 0.00008,      # Дифференциальный коэффициент
+            'max_output': 0.015,  # Максимальное смещение по X (м)
+            'target': 90.0,   # Целевой угол pitch (градусы) - вертикально
+            'integral_limit': 8.0,  # Лимит интегральной составляющей (anti-windup)
+        },
+    },
+    
+    # Пороги активации PID в покое
+    'pid_activation_threshold': {
+        'roll': 1.5,   # Минимальное отклонение для активации PID (градусы)
+        'pitch': 1.5,  # Минимальное отклонение для активации PID (градусы)
+    },
+    
+    # Ограничения на смещения туловища для PID в покое
+    'pid_limits': {
+        'init_x_offset': {'min': -0.025, 'max': 0.025},  # м
+        'init_y_offset': {'min': -0.025, 'max': 0.025},  # м
+        'init_roll_offset': {'min': -4.0, 'max': 4.0},  # градусы
+        'init_pitch_offset': {'min': -4.0, 'max': 4.0},  # градусы
+    },
+    
+    # Коэффициенты для преобразования PID выхода в смещения туловища
+    'pid_correction_ratios': {
+        'roll_to_y_offset': 1.0,      # Коэффициент для init_y_offset от roll PID
+        'roll_to_roll_offset': 0.4,   # Коэффициент для init_roll_offset от roll PID
+        'pitch_to_x_offset': 1.0,     # Коэффициент для init_x_offset от pitch PID
+        'pitch_to_pitch_offset': 0.4, # Коэффициент для init_pitch_offset от pitch PID
+    },
+    
+    # Интервал обновления PID корректировок в покое
+    'pid_update_interval': 0.05,  # Интервал обновления (сек) - 20Hz для плавности
+    
+    # Фильтрация данных IMU для PID в покое
+    'pid_filter': {
+        'enabled': True,
+        'alpha': 0.8,  # Коэффициент фильтрации (0-1), больше = меньше фильтрации
+    },
 }
 
 # ========== КОНФИГУРАЦИЯ: СТАБИЛИЗАЦИЯ ПРИ ХОДЬБЕ ==========
@@ -235,7 +292,7 @@ class AutoStabilization:
         
         self.rest_config = REST_STABILIZATION_CONFIG.copy()
         self.walking_config = WALKING_STABILIZATION_CONFIG.copy()
-        self.enabled = False
+        self.enabled = True  # Включаем модуль по умолчанию для работы стабилизации
         self.rest_enabled = True
         self.walking_enabled = True
         
@@ -261,6 +318,13 @@ class AutoStabilization:
             'return_start_time': None,  # Время начала возврата
             'cooldown_until': 0,  # Время до которого действует cooldown (не активировать новую стабилизацию)
             'angular_velocity_history': [],  # История угловых скоростей для определения качания [{'roll': r, 'pitch': p, 'yaw': y, 'time': t, 'direction': d}, ...]
+            # Состояние PID регулятора в покое
+            'pid': {
+                'last_time': None,      # Время последнего обновления PID
+                'integral': {'roll': 0.0, 'pitch': 0.0},  # Интегральная составляющая PID
+                'last_error': {'roll': 0.0, 'pitch': 0.0},  # Последняя ошибка
+                'filtered_orientation': {'roll': 0.0, 'pitch': 90.0},  # Отфильтрованная ориентация
+            },
         }
         
         # Инициализация эталона
@@ -303,10 +367,24 @@ class AutoStabilization:
         Returns:
             bool: True если был выполнен шаг стабилизации
         """
+        # Логируем статус (редко, раз в 3 секунды)
+        current_time = rospy.get_time()
+        if not hasattr(self, '_last_process_log') or current_time - self._last_process_log > 3.0:
+            rospy.loginfo(f"🔧 AutoStabilization.process: enabled={self.enabled}, rest_enabled={self.rest_enabled}, "
+                         f"walking_enabled={self.walking_enabled}, status={status}, robot_state={robot_state}")
+            rospy.loginfo(f"🔧 Rest PID enabled: {self.rest_config.get('pid_enabled', False)}")
+            self._last_process_log = current_time
+        
         if not self.enabled:
+            if not hasattr(self, '_last_enabled_false_log') or current_time - self._last_enabled_false_log > 5.0:
+                rospy.logwarn(f"🔧 AutoStabilization.process: MODULE DISABLED (self.enabled=False)")
+                self._last_enabled_false_log = current_time
             return False
         
         if imu_data is None:
+            if not hasattr(self, '_last_imu_none_log') or current_time - self._last_imu_none_log > 5.0:
+                rospy.logwarn(f"🔧 AutoStabilization.process: IMU data is None")
+                self._last_imu_none_log = current_time
             return False
         
         # Определяем режим стабилизации
@@ -319,6 +397,11 @@ class AutoStabilization:
             self._process_walking_stabilization(imu_data)
             # Сохраняем последние данные IMU для использования в apply_walking_corrections
             self.walking_stabilization_state['last_imu_data'] = imu_data
+        else:
+            if not hasattr(self, '_last_status_mismatch_log') or current_time - self._last_status_mismatch_log > 3.0:
+                rospy.logdebug(f"🔧 AutoStabilization.process: status={status}, rest_enabled={self.rest_enabled}, "
+                             f"walking_enabled={self.walking_enabled} - skipping")
+                self._last_status_mismatch_log = current_time
         
         return rest_step_executed
     
@@ -336,6 +419,14 @@ class AutoStabilization:
         Returns:
             bool: True если была выполнена стабилизация
         """
+        current_time = rospy.get_time()
+        
+        # Логируем вход в метод (редко)
+        if not hasattr(self, '_last_rest_process_log') or current_time - self._last_rest_process_log > 2.0:
+            rospy.loginfo(f"🔧 _process_rest_stabilization: robot_state={robot_state}, "
+                         f"pid_enabled={self.rest_config.get('pid_enabled', False)}")
+            self._last_rest_process_log = current_time
+        
         # КРИТИЧНО: Проверяем состояние робота ПЕРВЫМ делом - если не стоит, немедленно останавливаем стабилизацию
         # Это предотвращает конфликт с логикой падений и подъема
         if robot_state != 'stand':
@@ -344,7 +435,9 @@ class AutoStabilization:
                 rospy.logwarn(f"⚠️ Robot not standing ({robot_state}) - stopping stabilization immediately")
             else:
                 # Даже если стабилизация не активна, но робот не стоит - останавливаем на всякий случай
-                rospy.logdebug(f"⚠️ Robot not standing ({robot_state}) - ensuring gait_manager is stopped")
+                if not hasattr(self, '_last_not_standing_log') or current_time - self._last_not_standing_log > 3.0:
+                    rospy.logwarn(f"⚠️ Robot not standing ({robot_state}) - PID in rest will not work")
+                    self._last_not_standing_log = current_time
             try:
                 self.gait_manager.stop()
             except Exception as e:
@@ -360,10 +453,14 @@ class AutoStabilization:
         if joystick_moving:
             if self.rest_stabilization_state['stabilization_active']:
                 rospy.loginfo("🎮 Joystick movement detected - stopping stabilization")
-                try:
-                    self.gait_manager.stop()
-                except Exception as e:
-                    rospy.logwarn(f"Error stopping gait_manager: {e}")
+            else:
+                if not hasattr(self, '_last_joystick_moving_log') or current_time - self._last_joystick_moving_log > 3.0:
+                    rospy.logwarn(f"🔧 Joystick moving (x={x_move_amp:.4f}, y={y_move_amp:.4f}, angle={angle_move_amp:.4f}) - PID in rest will not work")
+                    self._last_joystick_moving_log = current_time
+            try:
+                self.gait_manager.stop()
+            except Exception as e:
+                rospy.logwarn(f"Error stopping gait_manager: {e}")
             self._reset_rest_stabilization_state()
             return False
         
@@ -396,13 +493,53 @@ class AutoStabilization:
                 rospy.loginfo(f"📐 Reference orientation (auto): {state['reference']}")
         
         if not state['reference_set']:
+            if not hasattr(self, '_last_reference_not_set_log') or current_time - self._last_reference_not_set_log > 3.0:
+                rospy.logwarn(f"🔧 Reference not set yet (reference_mode={config['reference_mode']}) - PID in rest will not work")
+                self._last_reference_not_set_log = current_time
             return False  # Ждем установки эталона
         
-        # Вычисляем отклонения от эталона
+        # Применяем PID корректировки, если включены (работает параллельно с шаговой стабилизацией)
+        pid_enabled = config.get('pid_enabled', False)
+        if pid_enabled:
+            if not hasattr(self, '_last_pid_call_attempt_log') or current_time - self._last_pid_call_attempt_log > 2.0:
+                rospy.loginfo(f"🔧 Calling _apply_rest_pid_corrections (pid_enabled=True)")
+                self._last_pid_call_attempt_log = current_time
+            self._apply_rest_pid_corrections(imu_data, current_time)
+        else:
+            # Логируем только раз в 3 секунды для отладки
+            if not hasattr(self, '_last_pid_disabled_log') or current_time - self._last_pid_disabled_log > 3.0:
+                rospy.logwarn(f"🔧 Rest PID DISABLED (pid_enabled={pid_enabled})")
+                self._last_pid_disabled_log = current_time
+        
+        # ШАГОВАЯ СТАБИЛИЗАЦИЯ: выполняем только если включена
+        # Если выключена, работаем только через PID корректировки позы
+        step_stabilization_enabled = config.get('step_stabilization_enabled', False)
+        
+        # Вычисляем отклонения от эталона (нужны для шаговой стабилизации и логирования)
         ref = state['reference']
         roll_dev = roll_deg - ref['roll']
         pitch_dev = pitch_deg - ref['pitch']
         yaw_dev = yaw_deg - ref['yaw']
+        
+        # Если шаговая стабилизация выключена, пропускаем всю логику шагов
+        if not step_stabilization_enabled:
+            # Останавливаем активную шаговую стабилизацию, если она была запущена
+            if state['stabilization_active']:
+                rospy.loginfo("🔧 Step stabilization disabled - stopping active steps")
+                try:
+                    self.gait_manager.stop()
+                except Exception as e:
+                    rospy.logwarn(f"Error stopping gait_manager: {e}")
+                state['stabilization_active'] = False
+                state['cooldown_until'] = 0
+            
+            # Логируем статус (редко)
+            if not hasattr(self, '_last_step_disabled_log') or current_time - self._last_step_disabled_log > 5.0:
+                rospy.loginfo(f"🔧 Step stabilization DISABLED - only PID corrections active (roll_dev={roll_dev:.2f}°, pitch_dev={pitch_dev:.2f}°)")
+                self._last_step_disabled_log = current_time
+            
+            # Возвращаем False - шаги не выполняются, только PID работает
+            return False
         
         # Проверяем, вышли ли за критические углы (с учетом включения/выключения осей)
         critical = config['critical_angles']
@@ -1138,6 +1275,232 @@ class AutoStabilization:
         state['last_update_time'] = 0
         state['cooldown_until'] = 0
         state['angular_velocity_history'] = []
+        # Сбрасываем состояние PID
+        state['pid']['last_time'] = None
+        state['pid']['integral'] = {'roll': 0.0, 'pitch': 0.0}
+        state['pid']['last_error'] = {'roll': 0.0, 'pitch': 0.0}
+    
+    def _apply_rest_pid_corrections(self, imu_data, current_time):
+        """
+        Применяет PID-корректировки для удержания вертикального положения туловища в покое.
+        Корректирует смещения туловища через gait_manager.update_param() без выполнения шагов.
+        
+        Args:
+            imu_data: Словарь с данными IMU
+            current_time: Текущее время
+        """
+        config = self.rest_config
+        
+        # Проверяем интервал обновления
+        pid_state = self.rest_stabilization_state['pid']
+        last_pid_time = pid_state.get('last_time')
+        
+        # Логируем вызов метода (всегда первый раз, потом редко)
+        if last_pid_time is None:
+            rospy.loginfo(f"🔧 Rest PID: FIRST CALL - starting PID corrections")
+        elif not hasattr(self, '_last_pid_call_log') or current_time - self._last_pid_call_log > 1.0:
+            dt_since_update = current_time - last_pid_time
+            rospy.loginfo(f"🔧 Rest PID: called (dt={dt_since_update:.3f}s)")
+            self._last_pid_call_log = current_time
+        
+        if last_pid_time is not None:
+            dt_since_update = current_time - last_pid_time
+            if dt_since_update < config.get('pid_update_interval', 0.05):
+                if not hasattr(self, '_last_pid_interval_log') or current_time - self._last_pid_interval_log > 3.0:
+                    rospy.logdebug(f"🔧 Rest PID: too early for update (dt={dt_since_update:.3f}s < {config.get('pid_update_interval', 0.05):.3f}s)")
+                    self._last_pid_interval_log = current_time
+                return  # Слишком рано для обновления
+        
+        orientation = imu_data.get('orientation', {})
+        angular_velocity = imu_data.get('angular_velocity', {})
+        
+        if not orientation:
+            return
+        
+        roll_deg = orientation.get('roll_deg', 0)
+        pitch_deg = orientation.get('pitch_deg', 0)
+        
+        # Применяем фильтрацию, если включена
+        if config.get('pid_filter', {}).get('enabled', True):
+            alpha = config['pid_filter'].get('alpha', 0.8)
+            # Инициализируем filtered_orientation при первом вызове
+            if pid_state['filtered_orientation']['roll'] == 0.0 and pid_state['filtered_orientation']['pitch'] == 90.0:
+                pid_state['filtered_orientation']['roll'] = roll_deg
+                pid_state['filtered_orientation']['pitch'] = pitch_deg
+            else:
+                pid_state['filtered_orientation']['roll'] = alpha * pid_state['filtered_orientation']['roll'] + (1 - alpha) * roll_deg
+                pid_state['filtered_orientation']['pitch'] = alpha * pid_state['filtered_orientation']['pitch'] + (1 - alpha) * pitch_deg
+            roll_deg = pid_state['filtered_orientation']['roll']
+            pitch_deg = pid_state['filtered_orientation']['pitch']
+        
+        # Вычисляем ошибки относительно целевых углов
+        roll_error = roll_deg - config['pid']['roll']['target']
+        pitch_error = pitch_deg - config['pid']['pitch']['target']
+        
+        # Логируем текущие углы и ошибки (редко, раз в 2 секунды)
+        if not hasattr(self, '_last_pid_error_log') or current_time - self._last_pid_error_log > 2.0:
+            rospy.loginfo(f"🔧 Rest PID: roll={roll_deg:.2f}° (error={roll_error:.2f}°), pitch={pitch_deg:.2f}° (error={pitch_error:.2f}°)")
+            rospy.loginfo(f"🔧 Rest PID: thresholds roll={config['pid_activation_threshold']['roll']}°, pitch={config['pid_activation_threshold']['pitch']}°")
+            self._last_pid_error_log = current_time
+        
+        # Проверяем пороги активации
+        if abs(roll_error) < config['pid_activation_threshold']['roll'] and \
+           abs(pitch_error) < config['pid_activation_threshold']['pitch']:
+            # Отклонения малы, сбрасываем интегральную составляющую
+            if not hasattr(self, '_last_pid_threshold_log') or current_time - self._last_pid_threshold_log > 3.0:
+                rospy.logdebug(f"🔧 Rest PID: errors below threshold, resetting integral")
+                self._last_pid_threshold_log = current_time
+            pid_state['integral'] = {'roll': 0.0, 'pitch': 0.0}
+            return
+        
+        # Вычисляем dt для интегральной и дифференциальной составляющих
+        dt = current_time - last_pid_time if last_pid_time else config.get('pid_update_interval', 0.05)
+        dt = max(0.001, min(0.1, dt))  # Ограничиваем dt разумными пределами
+        pid_state['last_time'] = current_time
+        
+        # Получаем угловые скорости для дифференциальной составляющей
+        roll_vel = angular_velocity.get('x', 0) * 180.0 / math.pi  # рад/с -> град/с
+        pitch_vel = angular_velocity.get('y', 0) * 180.0 / math.pi
+        
+        # Вычисляем PID выходы
+        roll_pid_output = 0.0
+        pitch_pid_output = 0.0
+        
+        if config['pid']['roll']['enabled']:
+            roll_pid_output = self._calculate_pid(
+                error=roll_error,
+                integral=pid_state['integral']['roll'],
+                derivative=roll_vel,
+                dt=dt,
+                config=config['pid']['roll']
+            )
+            # Обновляем интегральную составляющую
+            pid_state['integral']['roll'] += roll_error * dt
+            # Ограничиваем интегральную составляющую (anti-windup)
+            max_integral = config['pid']['roll']['integral_limit']
+            pid_state['integral']['roll'] = max(-max_integral, min(max_integral, pid_state['integral']['roll']))
+            
+            # Логируем PID компоненты для roll (редко)
+            if not hasattr(self, '_last_pid_roll_components_log') or current_time - self._last_pid_roll_components_log > 2.0:
+                p_term = config['pid']['roll']['kp'] * roll_error
+                i_term = config['pid']['roll']['ki'] * pid_state['integral']['roll']
+                d_term = config['pid']['roll']['kd'] * roll_vel
+                rospy.loginfo(f"🔧 Rest PID roll components: P={p_term:.6f}, I={i_term:.6f}, D={d_term:.6f}, output={roll_pid_output:.6f}")
+                self._last_pid_roll_components_log = current_time
+        
+        if config['pid']['pitch']['enabled']:
+            pitch_pid_output = self._calculate_pid(
+                error=pitch_error,
+                integral=pid_state['integral']['pitch'],
+                derivative=pitch_vel,
+                dt=dt,
+                config=config['pid']['pitch']
+            )
+            # Обновляем интегральную составляющую
+            pid_state['integral']['pitch'] += pitch_error * dt
+            # Ограничиваем интегральную составляющую (anti-windup)
+            max_integral = config['pid']['pitch']['integral_limit']
+            pid_state['integral']['pitch'] = max(-max_integral, min(max_integral, pid_state['integral']['pitch']))
+            
+            # Логируем PID компоненты для pitch (редко)
+            if not hasattr(self, '_last_pid_pitch_components_log') or current_time - self._last_pid_pitch_components_log > 2.0:
+                p_term = config['pid']['pitch']['kp'] * pitch_error
+                i_term = config['pid']['pitch']['ki'] * pid_state['integral']['pitch']
+                d_term = config['pid']['pitch']['kd'] * pitch_vel
+                rospy.loginfo(f"🔧 Rest PID pitch components: P={p_term:.6f}, I={i_term:.6f}, D={d_term:.6f}, output={pitch_pid_output:.6f}")
+                self._last_pid_pitch_components_log = current_time
+        
+        # Получаем текущие параметры походки
+        gait_param = self.gait_manager.get_gait_param()
+        
+        # Получаем текущие значения или используем базовые
+        current_y_offset = gait_param.get('init_y_offset', 0)
+        current_x_offset = gait_param.get('init_x_offset', 0)
+        current_roll_offset = gait_param.get('init_roll_offset', 0)
+        current_pitch_offset = gait_param.get('init_pitch_offset', 0)
+        
+        # Применяем корректировки
+        limits = config['pid_limits']
+        ratios = config['pid_correction_ratios']
+        
+        # Применяем корректировки roll
+        roll_applied = False
+        if config['pid']['roll']['enabled'] and abs(roll_pid_output) > 0.001:
+            y_correction = roll_pid_output * ratios['roll_to_y_offset']
+            roll_correction = roll_pid_output * ratios['roll_to_roll_offset']
+            
+            new_y_offset = max(
+                limits['init_y_offset']['min'],
+                min(limits['init_y_offset']['max'], current_y_offset + y_correction)
+            )
+            new_roll_offset = max(
+                limits['init_roll_offset']['min'],
+                min(limits['init_roll_offset']['max'], current_roll_offset + roll_correction)
+            )
+            
+            gait_param['init_y_offset'] = new_y_offset
+            gait_param['init_roll_offset'] = new_roll_offset
+            roll_applied = True
+            
+            # Логируем применение корректировок roll
+            if not hasattr(self, '_last_pid_roll_log') or current_time - self._last_pid_roll_log > 1.0:
+                rospy.loginfo(f"🔧 Rest PID roll: output={roll_pid_output:.4f}, y_corr={y_correction:.4f}m, roll_corr={roll_correction:.2f}°")
+                rospy.loginfo(f"🔧 Rest PID roll: y_offset {current_y_offset:.4f}→{new_y_offset:.4f}m, roll_offset {current_roll_offset:.2f}→{new_roll_offset:.2f}°")
+                self._last_pid_roll_log = current_time
+        elif config['pid']['roll']['enabled'] and abs(roll_pid_output) <= 0.001:
+            if not hasattr(self, '_last_pid_roll_small_log') or current_time - self._last_pid_roll_small_log > 3.0:
+                rospy.logdebug(f"🔧 Rest PID roll: output too small ({roll_pid_output:.6f}), skipping")
+                self._last_pid_roll_small_log = current_time
+        
+        # Применяем корректировки pitch
+        pitch_applied = False
+        if config['pid']['pitch']['enabled'] and abs(pitch_pid_output) > 0.001:
+            x_correction = pitch_pid_output * ratios['pitch_to_x_offset']
+            pitch_correction = pitch_pid_output * ratios['pitch_to_pitch_offset']
+            
+            new_x_offset = max(
+                limits['init_x_offset']['min'],
+                min(limits['init_x_offset']['max'], current_x_offset + x_correction)
+            )
+            new_pitch_offset = max(
+                limits['init_pitch_offset']['min'],
+                min(limits['init_pitch_offset']['max'], current_pitch_offset + pitch_correction)
+            )
+            
+            gait_param['init_x_offset'] = new_x_offset
+            gait_param['init_pitch_offset'] = new_pitch_offset
+            pitch_applied = True
+            
+            # Логируем применение корректировок pitch
+            if not hasattr(self, '_last_pid_pitch_log') or current_time - self._last_pid_pitch_log > 1.0:
+                rospy.loginfo(f"🔧 Rest PID pitch: output={pitch_pid_output:.4f}, x_corr={x_correction:.4f}m, pitch_corr={pitch_correction:.2f}°")
+                rospy.loginfo(f"🔧 Rest PID pitch: x_offset {current_x_offset:.4f}→{new_x_offset:.4f}m, pitch_offset {current_pitch_offset:.2f}→{new_pitch_offset:.2f}°")
+                self._last_pid_pitch_log = current_time
+        elif config['pid']['pitch']['enabled'] and abs(pitch_pid_output) <= 0.001:
+            if not hasattr(self, '_last_pid_pitch_small_log') or current_time - self._last_pid_pitch_small_log > 3.0:
+                rospy.logdebug(f"🔧 Rest PID pitch: output too small ({pitch_pid_output:.6f}), skipping")
+                self._last_pid_pitch_small_log = current_time
+        
+        # Применяем корректировки через update_param (без движения)
+        if roll_applied or pitch_applied:
+            try:
+                # Используем параметры из gait_params для period_time
+                period_time = config['gait_params']['period_time']
+                self.gait_manager.update_param(
+                    period_time,
+                    0, 0, 0,  # Без движения
+                    gait_param,
+                    step_num=0
+                )
+                if not hasattr(self, '_last_pid_update_log') or current_time - self._last_pid_update_log > 1.0:
+                    rospy.loginfo(f"🔧 Rest PID: applied corrections via update_param (roll={roll_applied}, pitch={pitch_applied})")
+                    self._last_pid_update_log = current_time
+            except Exception as e:
+                rospy.logwarn(f"🔧 Rest PID: Error applying corrections: {e}")
+        else:
+            if not hasattr(self, '_last_pid_no_correction_log') or current_time - self._last_pid_no_correction_log > 3.0:
+                rospy.logdebug(f"🔧 Rest PID: no corrections applied (roll_output={roll_pid_output:.6f}, pitch_output={pitch_pid_output:.6f})")
+                self._last_pid_no_correction_log = current_time
     
     def _process_walking_stabilization(self, imu_data):
         """
@@ -1393,3 +1756,70 @@ class AutoStabilization:
             dict: Копия конфигурации
         """
         return self.walking_config.copy()
+    
+    def set_rest_pid_enabled(self, enabled):
+        """
+        Включает/выключает PID стабилизацию в покое.
+        
+        Args:
+            enabled: True для включения, False для выключения
+        """
+        self.rest_config['pid_enabled'] = enabled
+        if not enabled:
+            # Сбрасываем состояние PID
+            self.rest_stabilization_state['pid']['last_time'] = None
+            self.rest_stabilization_state['pid']['integral'] = {'roll': 0.0, 'pitch': 0.0}
+            self.rest_stabilization_state['pid']['last_error'] = {'roll': 0.0, 'pitch': 0.0}
+        rospy.loginfo(f"🔧 Rest stabilization PID: {'ENABLED' if enabled else 'DISABLED'}")
+        rospy.loginfo(f"🔧 Rest PID config: roll_enabled={self.rest_config['pid']['roll']['enabled']}, pitch_enabled={self.rest_config['pid']['pitch']['enabled']}")
+        rospy.loginfo(f"🔧 Rest PID thresholds: roll={self.rest_config['pid_activation_threshold']['roll']}°, pitch={self.rest_config['pid_activation_threshold']['pitch']}°")
+    
+    def set_rest_pid_axis_enabled(self, axis, enabled):
+        """
+        Включает/выключает PID стабилизацию для конкретной оси в покое.
+        
+        Args:
+            axis: 'roll' или 'pitch'
+            enabled: True для включения, False для выключения
+        """
+        if axis in ['roll', 'pitch']:
+            self.rest_config['pid'][axis]['enabled'] = enabled
+            if not enabled:
+                self.rest_stabilization_state['pid']['integral'][axis] = 0.0
+            rospy.loginfo(f"Rest PID {axis}: {'enabled' if enabled else 'disabled'}")
+    
+    def set_rest_pid_params(self, axis, kp=None, ki=None, kd=None, max_output=None):
+        """
+        Устанавливает параметры PID для конкретной оси в покое.
+        
+        Args:
+            axis: 'roll' или 'pitch'
+            kp: Пропорциональный коэффициент (опционально)
+            ki: Интегральный коэффициент (опционально)
+            kd: Дифференциальный коэффициент (опционально)
+            max_output: Максимальный выход (опционально)
+        """
+        if axis not in ['roll', 'pitch']:
+            return
+        
+        if kp is not None:
+            self.rest_config['pid'][axis]['kp'] = kp
+        if ki is not None:
+            self.rest_config['pid'][axis]['ki'] = ki
+        if kd is not None:
+            self.rest_config['pid'][axis]['kd'] = kd
+        if max_output is not None:
+            self.rest_config['pid'][axis]['max_output'] = max_output
+        
+        rospy.loginfo(f"Rest PID {axis} params updated: kp={self.rest_config['pid'][axis]['kp']}, "
+                     f"ki={self.rest_config['pid'][axis]['ki']}, kd={self.rest_config['pid'][axis]['kd']}, "
+                     f"max_output={self.rest_config['pid'][axis]['max_output']}")
+    
+    def get_rest_stabilization_config(self):
+        """
+        Возвращает текущую конфигурацию стабилизации в покое.
+        
+        Returns:
+            dict: Копия конфигурации
+        """
+        return self.rest_config.copy()
