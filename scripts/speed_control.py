@@ -77,10 +77,7 @@ class SpeedControl:
                 'gait_base': {
                     'step_fb_ratio': 0.028,
                     'z_swap_amplitude': 0.006,
-                    'init_y_offset': -0.008,  # Может меняться до 0 в зависимости от движения
-                    'init_x_offset': 0.0,
-                    'init_roll_offset': 0.0,  # Может меняться до 3-5 в зависимости от движения
-                    'init_pitch_offset': 0.0,
+                
                     'hip_pitch_offset': 15.0,
                     'pelvis_offset': 5.0
                 }
@@ -96,10 +93,6 @@ class SpeedControl:
                 'gait_base': {
                     'step_fb_ratio': 0.028,
                     'z_swap_amplitude': 0.006,
-                    'init_y_offset': -0.008,  # Может меняться до -0.005
-                    'init_x_offset': 0.0,
-                    'init_roll_offset': 0.0,  # Может меняться до 3
-                    'init_pitch_offset': 0.0,
                     'hip_pitch_offset': 15.0,
                     'pelvis_offset': 5.0
                 }
@@ -115,10 +108,6 @@ class SpeedControl:
                 'gait_base': {
                     'step_fb_ratio': 0.028,
                     'z_swap_amplitude': 0.006,
-                    'init_y_offset': -0.005,  # Может меняться до 0
-                    'init_x_offset': 0.0,
-                    'init_roll_offset': 0.0,  # Может меняться до 3
-                    'init_pitch_offset': 0.0,
                     'hip_pitch_offset': 15.0,
                     'pelvis_offset': 5.0
                 }
@@ -134,10 +123,6 @@ class SpeedControl:
                 'gait_base': {
                     'step_fb_ratio': 0.028,
                     'z_swap_amplitude': 0.006,
-                    'init_y_offset': -0.008,
-                    'init_x_offset': 0.0,
-                    'init_roll_offset': 0.0,  # Может меняться до -3 или -1.0
-                    'init_pitch_offset': 0.0,
                     'hip_pitch_offset': 15.0,
                     'pelvis_offset': 5.0
                 }
