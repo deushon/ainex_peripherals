@@ -195,8 +195,20 @@ class SpeedControl:
         period_time = list(params['period_time'])
         
         # Применяем базовые параметры режима скорости
-        # Стабилизация при ходьбе может переопределить их только в меньшую сторону
-        gait_param.update(params.get('gait_base', {}))
+        # ВАЖНО: Сохраняем текущие значения смещений перед обновлением базовых параметров
+        # Это позволяет PID регулятору изменять их, не перезаписывая базовыми значениями
+        offset_keys = ['init_x_offset', 'init_y_offset', 'init_roll_offset', 'init_pitch_offset']
+        saved_offsets = {key: gait_param.get(key, 0) for key in offset_keys}
+        
+        # Применяем базовые параметры (кроме смещений)
+        gait_base = params.get('gait_base', {})
+        for key, value in gait_base.items():
+            if key not in offset_keys:
+                gait_param[key] = value
+        
+        # Восстанавливаем сохраненные смещения (PID может их изменить позже в apply_walking_corrections)
+        for key in offset_keys:
+            gait_param[key] = saved_offsets[key]
         
         # Вычисляем амплитуды движения
         if abs(axes['ly']) > AXIS_THRESHOLD:

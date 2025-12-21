@@ -38,6 +38,10 @@ class AutoStabilization:
         # Единая конфигурация PID (используется для покоя и ходьбы)
         self.pid_config = UNIFIED_PID_CONFIG.copy()
         
+        # Кэш для часто используемых значений (обновляется при изменении конфигурации)
+        self._config_cache = {}
+        self._update_config_cache()
+        
         self.enabled = True  # Включаем модуль по умолчанию
         self.rest_enabled = True
         self.walking_enabled = True
@@ -63,6 +67,10 @@ class AutoStabilization:
         self.pid_debug_pub = PidDebugPublisher()
         self.pid_config_sub = rospy.Subscriber('/stabilization/pid_config', PidConfig, self._pid_config_callback)
         
+        # Ограничение частоты публикации отладочных данных (для производительности)
+        self.debug_pub_last_time = 0
+        self.debug_pub_interval = 0.05  # 20 Hz максимум
+        
         # Инициализация эталона для покоя
         self._init_reference()
         
@@ -71,6 +79,26 @@ class AutoStabilization:
         rospy.loginfo("  Debug topic: /stabilization/pid_debug")
         rospy.loginfo("  Config topic: /stabilization/pid_config")
     
+    def _update_config_cache(self):
+        """Обновляет кэш часто используемых значений конфигурации."""
+        self._config_cache = {
+            'roll_threshold': self.pid_config.get('roll_activation_threshold', 2.0),
+            'pitch_threshold': self.pid_config.get('pitch_activation_threshold', 2.0),
+            'y_min': self.pid_config.get('limit_y_offset_min', -0.03),
+            'y_max': self.pid_config.get('limit_y_offset_max', 0.03),
+            'x_min': self.pid_config.get('limit_x_offset_min', -0.03),
+            'x_max': self.pid_config.get('limit_x_offset_max', 0.03),
+            'roll_min': self.pid_config.get('limit_roll_offset_min', -5.0),
+            'roll_max': self.pid_config.get('limit_roll_offset_max', 5.0),
+            'pitch_min': self.pid_config.get('limit_pitch_offset_min', -5.0),
+            'pitch_max': self.pid_config.get('limit_pitch_offset_max', 5.0),
+            'roll_to_y_ratio': self.pid_config.get('roll_to_y_offset_ratio', 1.0),
+            'roll_to_roll_ratio': self.pid_config.get('roll_to_roll_offset_ratio', 0.5),
+            'pitch_to_x_ratio': self.pid_config.get('pitch_to_x_offset_ratio', 1.0),
+            'pitch_to_pitch_ratio': self.pid_config.get('pitch_to_pitch_offset_ratio', 0.5),
+            'update_interval': self.pid_config.get('update_interval', 0.05),
+        }
+    
     def _init_reference(self):
         """Инициализирует эталонную ориентацию для покоя."""
         # Используем абсолютные углы (0, 90, 0) как эталон
@@ -78,133 +106,165 @@ class AutoStabilization:
         self.rest_state['reference_set'] = True
         rospy.loginfo("📐 Reference orientation: absolute angles (roll=0°, pitch=90°, yaw=0°)")
     
+    def _apply_base_offsets(self):
+        """
+        Применяет базовые смещения из конфигурации к текущей позе робота.
+        Вызывается автоматически при обновлении базовых смещений через топик.
+        """
+        try:
+            if self.gait_manager is None:
+                rospy.logwarn("⚠️ Cannot apply base offsets: gait_manager is None")
+                return
+            
+            gait_param = self.gait_manager.get_gait_param()
+            
+            # Получаем базовые смещения из конфигурации
+            base_x = self.pid_config.get('base_x_offset', 0.0)
+            base_y = self.pid_config.get('base_y_offset', 0.0)
+            base_roll = self.pid_config.get('base_roll_offset', 0.0)
+            base_pitch = self.pid_config.get('base_pitch_offset', 0.0)
+            
+            # Сохраняем старые значения для логирования
+            old_x = gait_param.get('init_x_offset', 0.0)
+            old_y = gait_param.get('init_y_offset', 0.0)
+            old_roll = gait_param.get('init_roll_offset', 0.0)
+            old_pitch = gait_param.get('init_pitch_offset', 0.0)
+            
+            # Применяем базовые смещения к позе
+            gait_param['init_x_offset'] = base_x
+            gait_param['init_y_offset'] = base_y
+            gait_param['init_roll_offset'] = base_roll
+            gait_param['init_pitch_offset'] = base_pitch
+            
+            # Получаем параметры периода из текущего режима скорости
+            speed_param = self.speed_params.get(self.speed_mode, {})
+            period_time = speed_param.get('period_time', [400, 0.2, 0.02])
+            
+            # Применяем изменения через update_param (без движения)
+            self.gait_manager.update_param(
+                period_time,
+                0, 0, 0,  # Без движения
+                gait_param,
+                step_num=0
+            )
+            
+            rospy.loginfo(f"✅ Base offsets applied:")
+            rospy.loginfo(f"   X: {old_x:.4f} → {base_x:.4f} m")
+            rospy.loginfo(f"   Y: {old_y:.4f} → {base_y:.4f} m")
+            rospy.loginfo(f"   Roll: {old_roll:.2f} → {base_roll:.2f}°")
+            rospy.loginfo(f"   Pitch: {old_pitch:.2f} → {base_pitch:.2f}°")
+        except Exception as e:
+            rospy.logerr(f"❌ Error applying base offsets: {e}")
+            import traceback
+            rospy.logerr(traceback.format_exc())
+    
     def _pid_config_callback(self, msg):
         """
         Обработчик сообщения конфигурации PID из топика.
         Обновляет единую конфигурацию PID в реальном времени.
-        Защищен от некорректных обновлений (значения по умолчанию из ROS сообщений).
+        Оптимизированная версия с упрощенной логикой обновления.
         """
         try:
             updates = {}
+            EPSILON = 1e-6  # Порог для сравнения float значений
             
-            # ВАЖНО: В ROS сообщениях все поля имеют значения по умолчанию (0.0 для float64, False для bool).
-            # Мы обновляем только те поля, которые были явно установлены (не равны значениям по умолчанию
-            # или находятся в разумных пределах для данного типа параметра).
+            # Список всех параметров для обновления (имя_поля, ключ_конфига, значение_по_умолчанию, проверка_на_ноль)
+            # проверка_на_ноль: True = пропускать нулевые значения, False = обновлять всегда
+            param_list = [
+                # Bool параметры
+                ('pid_enabled', 'pid_enabled', True, False),
+                ('roll_enabled', 'roll_enabled', True, False),
+                ('pitch_enabled', 'pitch_enabled', True, False),
+                ('filter_enabled', 'filter_enabled', True, False),
+                # Roll коэффициенты
+                ('roll_kp', 'roll_kp', 0.0, True),
+                ('roll_ki', 'roll_ki', 0.0, True),
+                ('roll_kd', 'roll_kd', 0.0, True),
+                ('roll_max_output', 'roll_max_output', 0.0, True),
+                ('roll_target', 'roll_target', 0.0, False),
+                ('roll_integral_limit', 'roll_integral_limit', 10.0, True),
+                ('roll_activation_threshold', 'roll_activation_threshold', 2.0, True),
+                # Pitch коэффициенты
+                ('pitch_kp', 'pitch_kp', 0.0, True),
+                ('pitch_ki', 'pitch_ki', 0.0, True),
+                ('pitch_kd', 'pitch_kd', 0.0, True),
+                ('pitch_max_output', 'pitch_max_output', 0.0, True),
+                ('pitch_target', 'pitch_target', 90.0, False),
+                ('pitch_integral_limit', 'pitch_integral_limit', 10.0, True),
+                ('pitch_activation_threshold', 'pitch_activation_threshold', 2.0, True),
+                # Базовые смещения
+                ('base_x_offset', 'base_x_offset', 0.0, False),
+                ('base_y_offset', 'base_y_offset', 0.0, False),
+                ('base_roll_offset', 'base_roll_offset', 0.0, False),
+                ('base_pitch_offset', 'base_pitch_offset', 0.0, False),
+                # Пределы смещений
+                ('limit_x_offset_min', 'limit_x_offset_min', -0.03, False),
+                ('limit_x_offset_max', 'limit_x_offset_max', 0.03, False),
+                ('limit_y_offset_min', 'limit_y_offset_min', -0.03, False),
+                ('limit_y_offset_max', 'limit_y_offset_max', 0.03, False),
+                ('limit_roll_offset_min', 'limit_roll_offset_min', -5.0, False),
+                ('limit_roll_offset_max', 'limit_roll_offset_max', 5.0, False),
+                ('limit_pitch_offset_min', 'limit_pitch_offset_min', -5.0, False),
+                ('limit_pitch_offset_max', 'limit_pitch_offset_max', 5.0, False),
+                # Коэффициенты преобразования
+                ('roll_to_y_offset_ratio', 'roll_to_y_offset_ratio', 1.0, True),
+                ('roll_to_roll_offset_ratio', 'roll_to_roll_offset_ratio', 0.5, True),
+                ('pitch_to_x_offset_ratio', 'pitch_to_x_offset_ratio', 1.0, True),
+                ('pitch_to_pitch_offset_ratio', 'pitch_to_pitch_offset_ratio', 0.5, True),
+                # Настройки фильтра
+                ('filter_alpha', 'filter_alpha', 0.7, True),
+                ('update_interval', 'update_interval', 0.05, True),
+            ]
             
-            # Обновляем глобальные настройки (bool - проверяем только если явно установлено)
-            # Для bool в ROS всегда есть значение (False по умолчанию), поэтому проверяем через специальный флаг
-            # или используем apply_to_walking/apply_to_rest как индикатор того, что сообщение валидно
+            # Обновляем параметры через цикл (более эффективно)
+            for msg_attr, config_key, default_val, skip_zero in param_list:
+                if not hasattr(msg, msg_attr):
+                    continue
+                    
+                msg_val = getattr(msg, msg_attr)
+                current_val = self.pid_config.get(config_key, default_val)
+                
+                # Для bool параметров - простое сравнение
+                if isinstance(msg_val, bool):
+                    if msg_val != current_val:
+                        updates[config_key] = msg_val
+                # Для float параметров
+                elif isinstance(msg_val, (int, float)):
+                    # Для базовых смещений всегда обновляем (даже если значение равно текущему)
+                    # Это позволяет применять смещения даже если они уже установлены
+                    if config_key.startswith('base_'):
+                        updates[config_key] = float(msg_val)
+                    # Для остальных параметров: пропускаем нулевые значения, если требуется
+                    elif skip_zero and abs(msg_val) < EPSILON:
+                        continue
+                    # Обновляем, если значение отличается
+                    elif abs(msg_val - current_val) > EPSILON:
+                        updates[config_key] = float(msg_val)
             
-            # Проверяем, что сообщение действительно содержит обновления (хотя бы один флаг установлен)
-            if not (msg.apply_to_walking or msg.apply_to_rest):
-                # Сообщение без флагов применения - вероятно, это сообщение по умолчанию при подключении
-                # Игнорируем его, чтобы не перезаписывать конфигурацию нулевыми значениями
-                return
-            
-            # Обновляем глобальные настройки (только если они отличаются от текущих)
-            if msg.pid_enabled != self.pid_config.get('pid_enabled', True):
-                updates['pid_enabled'] = msg.pid_enabled
-            if msg.roll_enabled != self.pid_config.get('roll_enabled', True):
-                updates['roll_enabled'] = msg.roll_enabled
-            if msg.pitch_enabled != self.pid_config.get('pitch_enabled', True):
-                updates['pitch_enabled'] = msg.pitch_enabled
-            
-            # Обновляем коэффициенты roll (только если они > 0 и отличаются от текущих)
-            # Коэффициенты PID не могут быть нулевыми, поэтому 0.0 означает "не установлено"
-            if msg.roll_kp > 0 and abs(msg.roll_kp - self.pid_config.get('roll_kp', 0)) > 1e-10:
-                updates['roll_kp'] = msg.roll_kp
-            if msg.roll_ki > 0 and abs(msg.roll_ki - self.pid_config.get('roll_ki', 0)) > 1e-10:
-                updates['roll_ki'] = msg.roll_ki
-            if msg.roll_kd > 0 and abs(msg.roll_kd - self.pid_config.get('roll_kd', 0)) > 1e-10:
-                updates['roll_kd'] = msg.roll_kd
-            if msg.roll_max_output > 0 and abs(msg.roll_max_output - self.pid_config.get('roll_max_output', 0)) > 1e-10:
-                updates['roll_max_output'] = msg.roll_max_output
-            if abs(msg.roll_target - self.pid_config.get('roll_target', 0)) > 1e-6:
-                updates['roll_target'] = msg.roll_target
-            if msg.roll_integral_limit > 0 and abs(msg.roll_integral_limit - self.pid_config.get('roll_integral_limit', 0)) > 1e-6:
-                updates['roll_integral_limit'] = msg.roll_integral_limit
-            
-            # Обновляем коэффициенты pitch (только если они > 0 и отличаются от текущих)
-            if msg.pitch_kp > 0 and abs(msg.pitch_kp - self.pid_config.get('pitch_kp', 0)) > 1e-10:
-                updates['pitch_kp'] = msg.pitch_kp
-            if msg.pitch_ki > 0 and abs(msg.pitch_ki - self.pid_config.get('pitch_ki', 0)) > 1e-10:
-                updates['pitch_ki'] = msg.pitch_ki
-            if msg.pitch_kd > 0 and abs(msg.pitch_kd - self.pid_config.get('pitch_kd', 0)) > 1e-10:
-                updates['pitch_kd'] = msg.pitch_kd
-            if msg.pitch_max_output > 0 and abs(msg.pitch_max_output - self.pid_config.get('pitch_max_output', 0)) > 1e-10:
-                updates['pitch_max_output'] = msg.pitch_max_output
-            if abs(msg.pitch_target - self.pid_config.get('pitch_target', 90)) > 1e-6:
-                updates['pitch_target'] = msg.pitch_target
-            if msg.pitch_integral_limit > 0 and abs(msg.pitch_integral_limit - self.pid_config.get('pitch_integral_limit', 0)) > 1e-6:
-                updates['pitch_integral_limit'] = msg.pitch_integral_limit
-            
-            # Обновляем пороги активации (только если > 0 и отличаются от текущих)
-            if msg.roll_activation_threshold > 0 and abs(msg.roll_activation_threshold - self.pid_config.get('roll_activation_threshold', 2.0)) > 1e-6:
-                updates['roll_activation_threshold'] = msg.roll_activation_threshold
-            if msg.pitch_activation_threshold > 0 and abs(msg.pitch_activation_threshold - self.pid_config.get('pitch_activation_threshold', 2.0)) > 1e-6:
-                updates['pitch_activation_threshold'] = msg.pitch_activation_threshold
-            
-            # Обновляем базовые смещения (только если отличаются от текущих)
-            if abs(msg.base_x_offset - self.pid_config.get('base_x_offset', 0)) > 1e-6:
-                updates['base_x_offset'] = msg.base_x_offset
-            if abs(msg.base_y_offset - self.pid_config.get('base_y_offset', 0)) > 1e-6:
-                updates['base_y_offset'] = msg.base_y_offset
-            if abs(msg.base_roll_offset - self.pid_config.get('base_roll_offset', 0)) > 1e-6:
-                updates['base_roll_offset'] = msg.base_roll_offset
-            if abs(msg.base_pitch_offset - self.pid_config.get('base_pitch_offset', 0)) > 1e-6:
-                updates['base_pitch_offset'] = msg.base_pitch_offset
-            
-            # Обновляем пределы смещений (только если отличаются от текущих)
-            if abs(msg.limit_x_offset_min - self.pid_config.get('limit_x_offset_min', -0.03)) > 1e-6:
-                updates['limit_x_offset_min'] = msg.limit_x_offset_min
-            if abs(msg.limit_x_offset_max - self.pid_config.get('limit_x_offset_max', 0.03)) > 1e-6:
-                updates['limit_x_offset_max'] = msg.limit_x_offset_max
-            if abs(msg.limit_y_offset_min - self.pid_config.get('limit_y_offset_min', -0.03)) > 1e-6:
-                updates['limit_y_offset_min'] = msg.limit_y_offset_min
-            if abs(msg.limit_y_offset_max - self.pid_config.get('limit_y_offset_max', 0.03)) > 1e-6:
-                updates['limit_y_offset_max'] = msg.limit_y_offset_max
-            if abs(msg.limit_roll_offset_min - self.pid_config.get('limit_roll_offset_min', -5.0)) > 1e-6:
-                updates['limit_roll_offset_min'] = msg.limit_roll_offset_min
-            if abs(msg.limit_roll_offset_max - self.pid_config.get('limit_roll_offset_max', 5.0)) > 1e-6:
-                updates['limit_roll_offset_max'] = msg.limit_roll_offset_max
-            if abs(msg.limit_pitch_offset_min - self.pid_config.get('limit_pitch_offset_min', -5.0)) > 1e-6:
-                updates['limit_pitch_offset_min'] = msg.limit_pitch_offset_min
-            if abs(msg.limit_pitch_offset_max - self.pid_config.get('limit_pitch_offset_max', 5.0)) > 1e-6:
-                updates['limit_pitch_offset_max'] = msg.limit_pitch_offset_max
-            
-            # Обновляем коэффициенты преобразования (только если > 0 и отличаются от текущих)
-            if msg.roll_to_y_offset_ratio > 0 and abs(msg.roll_to_y_offset_ratio - self.pid_config.get('roll_to_y_offset_ratio', 1.0)) > 1e-6:
-                updates['roll_to_y_offset_ratio'] = msg.roll_to_y_offset_ratio
-            if msg.roll_to_roll_offset_ratio > 0 and abs(msg.roll_to_roll_offset_ratio - self.pid_config.get('roll_to_roll_offset_ratio', 0.5)) > 1e-6:
-                updates['roll_to_roll_offset_ratio'] = msg.roll_to_roll_offset_ratio
-            if msg.pitch_to_x_offset_ratio > 0 and abs(msg.pitch_to_x_offset_ratio - self.pid_config.get('pitch_to_x_offset_ratio', 1.0)) > 1e-6:
-                updates['pitch_to_x_offset_ratio'] = msg.pitch_to_x_offset_ratio
-            if msg.pitch_to_pitch_offset_ratio > 0 and abs(msg.pitch_to_pitch_offset_ratio - self.pid_config.get('pitch_to_pitch_offset_ratio', 0.5)) > 1e-6:
-                updates['pitch_to_pitch_offset_ratio'] = msg.pitch_to_pitch_offset_ratio
-            
-            # Обновляем настройки фильтра (только если отличаются от текущих)
-            if msg.filter_enabled != self.pid_config.get('filter_enabled', True):
-                updates['filter_enabled'] = msg.filter_enabled
-            if msg.filter_alpha > 0 and abs(msg.filter_alpha - self.pid_config.get('filter_alpha', 0.7)) > 1e-6:
-                updates['filter_alpha'] = msg.filter_alpha
-            
-            # Обновляем интервал обновления (только если > 0 и отличается от текущего)
-            if msg.update_interval > 0 and abs(msg.update_interval - self.pid_config.get('update_interval', 0.05)) > 1e-6:
-                updates['update_interval'] = msg.update_interval
-            
-            # Применяем обновления
-            self.pid_config.update(updates)
-            self.rest_pid_controller.update_config(updates)
-            self.walking_pid_controller.update_config(updates)
+            # Применяем обновления только если есть изменения
+            if updates:
+                self.pid_config.update(updates)
+                self.rest_pid_controller.update_config(updates)
+                self.walking_pid_controller.update_config(updates)
+                # Обновляем кэш
+                self._update_config_cache()
+                rospy.loginfo(f"🔧 PID config updated: {len(updates)} parameters changed")
+                if rospy.get_param('~debug', False):
+                    rospy.loginfo(f"   Updated parameters: {list(updates.keys())}")
+                
+                # Если обновлены базовые смещения, применяем их к позе робота
+                base_offset_keys = ['base_x_offset', 'base_y_offset', 'base_roll_offset', 'base_pitch_offset']
+                updated_base_offsets = [key for key in base_offset_keys if key in updates]
+                if updated_base_offsets:
+                    rospy.loginfo(f"📍 Applying base offsets: {updated_base_offsets}")
+                    self._apply_base_offsets()
             
             # Сбрасываем интегральные составляющие, если запрошено
             if msg.reset_integral:
                 self.rest_pid_controller.reset_integral()
                 self.walking_pid_controller.reset_integral()
                 rospy.loginfo("🔧 PID integral components reset")
-            
-            if updates:
-                rospy.loginfo(f"🔧 PID config updated: {len(updates)} parameters changed")
+                
         except Exception as e:
             rospy.logwarn(f"Error updating PID config: {e}")
     
@@ -278,7 +338,7 @@ class AutoStabilization:
         # Проверяем интервал обновления
         last_time = pid_state.get('last_time')
         if last_time is not None:
-            update_interval = self.pid_config.get('update_interval', 0.05)
+            update_interval = self._config_cache.get('update_interval', 0.05)
             if current_time - last_time < update_interval:
                 return  # Слишком рано для обновления
         
@@ -301,9 +361,9 @@ class AutoStabilization:
         roll_result = pid_outputs['roll']
         pitch_result = pid_outputs['pitch']
         
-        # Проверяем пороги активации
-        roll_threshold = self.pid_config.get('roll_activation_threshold', 2.0)
-        pitch_threshold = self.pid_config.get('pitch_activation_threshold', 2.0)
+        # Проверяем пороги активации (используем кэш)
+        roll_threshold = self._config_cache.get('roll_threshold', 2.0)
+        pitch_threshold = self._config_cache.get('pitch_threshold', 2.0)
         
         if abs(roll_result['error']) < roll_threshold and abs(pitch_result['error']) < pitch_threshold:
             # Отклонения малы, сбрасываем интегральную составляющую
@@ -311,26 +371,27 @@ class AutoStabilization:
             return
         
         # Применяем корректировки к gait_param
+        # ВАЖНО: Получаем gait_param и сохраняем текущие значения, чтобы не перезаписать изменения от других модулей
         gait_param = self.gait_manager.get_gait_param()
         current_y_offset = gait_param.get('init_y_offset', 0)
         current_x_offset = gait_param.get('init_x_offset', 0)
         current_roll_offset = gait_param.get('init_roll_offset', 0)
         current_pitch_offset = gait_param.get('init_pitch_offset', 0)
         
-        # Пределы и коэффициенты
-        y_min = self.pid_config.get('limit_y_offset_min', -0.03)
-        y_max = self.pid_config.get('limit_y_offset_max', 0.03)
-        x_min = self.pid_config.get('limit_x_offset_min', -0.03)
-        x_max = self.pid_config.get('limit_x_offset_max', 0.03)
-        roll_min = self.pid_config.get('limit_roll_offset_min', -5.0)
-        roll_max = self.pid_config.get('limit_roll_offset_max', 5.0)
-        pitch_min = self.pid_config.get('limit_pitch_offset_min', -5.0)
-        pitch_max = self.pid_config.get('limit_pitch_offset_max', 5.0)
+        # Пределы и коэффициенты (используем кэш)
+        y_min = self._config_cache.get('y_min', -0.03)
+        y_max = self._config_cache.get('y_max', 0.03)
+        x_min = self._config_cache.get('x_min', -0.03)
+        x_max = self._config_cache.get('x_max', 0.03)
+        roll_min = self._config_cache.get('roll_min', -5.0)
+        roll_max = self._config_cache.get('roll_max', 5.0)
+        pitch_min = self._config_cache.get('pitch_min', -5.0)
+        pitch_max = self._config_cache.get('pitch_max', 5.0)
         
-        roll_to_y_ratio = self.pid_config.get('roll_to_y_offset_ratio', 1.0)
-        roll_to_roll_ratio = self.pid_config.get('roll_to_roll_offset_ratio', 0.5)
-        pitch_to_x_ratio = self.pid_config.get('pitch_to_x_offset_ratio', 1.0)
-        pitch_to_pitch_ratio = self.pid_config.get('pitch_to_pitch_offset_ratio', 0.5)
+        roll_to_y_ratio = self._config_cache.get('roll_to_y_ratio', 1.0)
+        roll_to_roll_ratio = self._config_cache.get('roll_to_roll_ratio', 0.5)
+        pitch_to_x_ratio = self._config_cache.get('pitch_to_x_ratio', 1.0)
+        pitch_to_pitch_ratio = self._config_cache.get('pitch_to_pitch_ratio', 0.5)
         
         # Применяем корректировки
         applied_y_correction = 0.0
@@ -381,24 +442,27 @@ class AutoStabilization:
             except Exception as e:
                 rospy.logwarn(f"Error applying rest PID corrections: {e}")
         
-        # Публикуем отладочные данные
-        applied_corrections = {
-            'x': applied_x_correction,
-            'y': applied_y_correction,
-            'roll': applied_roll_correction,
-            'pitch': applied_pitch_correction,
-            'current_x': gait_param.get('init_x_offset', 0),
-            'current_y': gait_param.get('init_y_offset', 0),
-            'current_roll': gait_param.get('init_roll_offset', 0),
-            'current_pitch': gait_param.get('init_pitch_offset', 0),
-        }
-        self.pid_debug_pub.publish(
-            imu_data, is_walking=False,
-            pid_state=self.rest_pid_controller.get_state(),
-            pid_outputs=pid_outputs,
-            applied_corrections=applied_corrections,
-            config=self.pid_config
-        )
+        # Публикуем отладочные данные (с ограничением частоты)
+        current_time = rospy.get_time()
+        if current_time - self.debug_pub_last_time >= self.debug_pub_interval:
+            applied_corrections = {
+                'x': applied_x_correction,
+                'y': applied_y_correction,
+                'roll': applied_roll_correction,
+                'pitch': applied_pitch_correction,
+                'current_x': gait_param.get('init_x_offset', 0),
+                'current_y': gait_param.get('init_y_offset', 0),
+                'current_roll': gait_param.get('init_roll_offset', 0),
+                'current_pitch': gait_param.get('init_pitch_offset', 0),
+            }
+            self.pid_debug_pub.publish(
+                imu_data, is_walking=False,
+                pid_state=self.rest_pid_controller.get_state(),
+                pid_outputs=pid_outputs,
+                applied_corrections=applied_corrections,
+                config=self.pid_config
+            )
+            self.debug_pub_last_time = current_time
     
     def apply_walking_corrections(self, gait_param, period_time):
         """
@@ -444,35 +508,35 @@ class AutoStabilization:
         roll_result = pid_outputs['roll']
         pitch_result = pid_outputs['pitch']
         
-        # Проверяем пороги активации
-        roll_threshold = self.pid_config.get('roll_activation_threshold', 2.0)
-        pitch_threshold = self.pid_config.get('pitch_activation_threshold', 2.0)
+        # Проверяем пороги активации (используем кэш)
+        roll_threshold = self._config_cache.get('roll_threshold', 2.0)
+        pitch_threshold = self._config_cache.get('pitch_threshold', 2.0)
         
         if abs(roll_result['error']) < roll_threshold and abs(pitch_result['error']) < pitch_threshold:
             # Отклонения малы, сбрасываем интегральную составляющую
             self.walking_pid_controller.reset_integral()
             return False
         
-        # Получаем текущие значения
+        # Получаем текущие значения из gait_param (уже переданного, не перезаписываем)
         current_y_offset = gait_param.get('init_y_offset', 0)
         current_x_offset = gait_param.get('init_x_offset', 0)
         current_roll_offset = gait_param.get('init_roll_offset', 0)
         current_pitch_offset = gait_param.get('init_pitch_offset', 0)
         
-        # Пределы и коэффициенты
-        y_min = self.pid_config.get('limit_y_offset_min', -0.03)
-        y_max = self.pid_config.get('limit_y_offset_max', 0.03)
-        x_min = self.pid_config.get('limit_x_offset_min', -0.03)
-        x_max = self.pid_config.get('limit_x_offset_max', 0.03)
-        roll_min = self.pid_config.get('limit_roll_offset_min', -5.0)
-        roll_max = self.pid_config.get('limit_roll_offset_max', 5.0)
-        pitch_min = self.pid_config.get('limit_pitch_offset_min', -5.0)
-        pitch_max = self.pid_config.get('limit_pitch_offset_max', 5.0)
+        # Пределы и коэффициенты (используем кэш)
+        y_min = self._config_cache.get('y_min', -0.03)
+        y_max = self._config_cache.get('y_max', 0.03)
+        x_min = self._config_cache.get('x_min', -0.03)
+        x_max = self._config_cache.get('x_max', 0.03)
+        roll_min = self._config_cache.get('roll_min', -5.0)
+        roll_max = self._config_cache.get('roll_max', 5.0)
+        pitch_min = self._config_cache.get('pitch_min', -5.0)
+        pitch_max = self._config_cache.get('pitch_max', 5.0)
         
-        roll_to_y_ratio = self.pid_config.get('roll_to_y_offset_ratio', 1.0)
-        roll_to_roll_ratio = self.pid_config.get('roll_to_roll_offset_ratio', 0.5)
-        pitch_to_x_ratio = self.pid_config.get('pitch_to_x_offset_ratio', 1.0)
-        pitch_to_pitch_ratio = self.pid_config.get('pitch_to_pitch_offset_ratio', 0.5)
+        roll_to_y_ratio = self._config_cache.get('roll_to_y_ratio', 1.0)
+        roll_to_roll_ratio = self._config_cache.get('roll_to_roll_ratio', 0.5)
+        pitch_to_x_ratio = self._config_cache.get('pitch_to_x_ratio', 1.0)
+        pitch_to_pitch_ratio = self._config_cache.get('pitch_to_pitch_ratio', 0.5)
         
         # Применяемые корректировки
         applied_y_correction = 0.0
@@ -508,24 +572,27 @@ class AutoStabilization:
             gait_param['init_x_offset'] = new_x_offset
             gait_param['init_pitch_offset'] = new_pitch_offset
         
-        # Публикуем отладочные данные
-        applied_corrections = {
-            'x': applied_x_correction,
-            'y': applied_y_correction,
-            'roll': applied_roll_correction,
-            'pitch': applied_pitch_correction,
-            'current_x': gait_param.get('init_x_offset', 0),
-            'current_y': gait_param.get('init_y_offset', 0),
-            'current_roll': gait_param.get('init_roll_offset', 0),
-            'current_pitch': gait_param.get('init_pitch_offset', 0),
-        }
-        self.pid_debug_pub.publish(
-            imu_data, is_walking=True,
-            pid_state=self.walking_pid_controller.get_state(),
-            pid_outputs=pid_outputs,
-            applied_corrections=applied_corrections,
-            config=self.pid_config
-        )
+        # Публикуем отладочные данные (с ограничением частоты)
+        current_time = rospy.get_time()
+        if current_time - self.debug_pub_last_time >= self.debug_pub_interval:
+            applied_corrections = {
+                'x': applied_x_correction,
+                'y': applied_y_correction,
+                'roll': applied_roll_correction,
+                'pitch': applied_pitch_correction,
+                'current_x': gait_param.get('init_x_offset', 0),
+                'current_y': gait_param.get('init_y_offset', 0),
+                'current_roll': gait_param.get('init_roll_offset', 0),
+                'current_pitch': gait_param.get('init_pitch_offset', 0),
+            }
+            self.pid_debug_pub.publish(
+                imu_data, is_walking=True,
+                pid_state=self.walking_pid_controller.get_state(),
+                pid_outputs=pid_outputs,
+                applied_corrections=applied_corrections,
+                config=self.pid_config
+            )
+            self.debug_pub_last_time = current_time
         
         return True
     
