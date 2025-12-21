@@ -45,7 +45,7 @@ class SpeedControl:
     
     def set_auto_stabilization(self, auto_stabilization):
         """
-        Устанавливает ссылку на модуль автостабилизации для применения корректировок при ходьбе.
+        Устанавливает ссылку на модуль автостабилизации для доступа к параметрам ориентации и throttle.
         
         Args:
             auto_stabilization: Экземпляр AutoStabilization
@@ -181,7 +181,7 @@ class SpeedControl:
         
         # Применяем базовые параметры режима скорости
         # ВАЖНО: Сохраняем текущие значения смещений перед обновлением базовых параметров
-        # Это позволяет PID регулятору изменять их, не перезаписывая базовыми значениями
+        # Это позволяет пользовательской стабилизации изменять их, не перезаписывая базовыми значениями
         offset_keys = ['init_x_offset', 'init_y_offset', 'init_roll_offset', 'init_pitch_offset']
         saved_offsets = {key: gait_param.get(key, 0) for key in offset_keys}
         
@@ -191,7 +191,7 @@ class SpeedControl:
             if key not in offset_keys:
                 gait_param[key] = value
         
-        # Восстанавливаем сохраненные смещения (PID может их изменить позже в apply_walking_corrections)
+        # Восстанавливаем сохраненные смещения (пользовательская стабилизация может их изменить)
         for key in offset_keys:
             gait_param[key] = saved_offsets[key]
         
@@ -206,10 +206,6 @@ class SpeedControl:
         update_param = any(abs(amp) > 0 for amp in [x_move_amplitude, y_move_amplitude, angle_move_amplitude])
         
         if update_param:
-            # Применяем корректировки стабилизации при ходьбе ТОЛЬКО когда есть движение
-            # Это должно быть ПОСЛЕ установки базовых параметров, но ДО set_step
-            if self.auto_stabilization is not None:
-                self.auto_stabilization.apply_walking_corrections(gait_param, period_time)
             # Используем body_height из gait_manager (единый источник истины)
             # Не устанавливаем init_z_offset, так как body_height уже актуален
             
@@ -246,9 +242,6 @@ class SpeedControl:
         
         status = 'move' if update_param else 'stop'
         if status == 'stop':
-            # При остановке сбрасываем корректировки стабилизации при ходьбе
-            if self.auto_stabilization is not None:
-                self.auto_stabilization.reset_walking_corrections()
             # Возвращаем базовые параметры режима скорости (сбрасываем корректировки)
             gait_param.update(params.get('gait_base', {}))
             # Обновляем параметры без движения для сброса корректировок

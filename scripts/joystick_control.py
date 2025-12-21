@@ -175,7 +175,7 @@ class JoystickController:
             self.speed_control.get_speed_mode(),
             initial_height
         )
-        # Устанавливаем ссылку на auto_stabilization в speed_control для применения корректировок
+        # Устанавливаем ссылку на auto_stabilization в speed_control для доступа к параметрам ориентации и throttle
         self.speed_control.set_auto_stabilization(self.auto_stabilization)
         
         # Создаем публикаторы для игры (нужны для button_actions)
@@ -308,10 +308,7 @@ class JoystickController:
         if imu_data is None:
             return
         
-        # Обновление автостабилизации
-        # ВАЖНО: Вызываем process() всегда (не только когда стоит), чтобы стабилизация могла остановить движение при падении
-        # process() сам проверит self.enabled внутри и вернет False раньше, если модуль выключен
-        # Это позволяет логам работать и показывать, почему PID не работает
+        # Сохраняем данные IMU для доступа через auto_stabilization (параметры ориентации)
         self.auto_stabilization.process(
             imu_data,
             self.imu_handler.get_robot_state(),
@@ -341,16 +338,11 @@ class JoystickController:
                 rospy.logwarn("Movement command blocked - no permission")
             return
         
-        # Обновляем speed_mode в auto_stabilization при изменении
+        # Обновляем speed_mode в auto_stabilization при изменении (для доступа к параметрам)
         current_speed_mode = self.speed_control.get_speed_mode()
         if self.auto_stabilization.speed_mode != current_speed_mode:
             self.auto_stabilization.speed_mode = current_speed_mode
             self.auto_stabilization.speed_params = self.speed_control.get_speed_params()
-        
-        # Синхронизируем высоту из gait_manager в auto_stabilization
-        current_height = self.speed_control.get_body_height()
-        if abs(self.auto_stabilization.init_z_offset - current_height) > 0.001:
-            self.auto_stabilization.init_z_offset = current_height
         
         # Обрабатываем оси через speed_control (высота берется из gait_manager)
         # Фактор адаптации резонанса удален - больше не используется
@@ -373,8 +365,6 @@ class JoystickController:
         """
         # Устанавливаем через speed_control (единый источник)
         self.speed_control.set_body_height(height)
-        # Синхронизируем с auto_stabilization
-        self.auto_stabilization.init_z_offset = self.speed_control.get_body_height()
 
     def height_callback(self, axes):
         """Обработчик изменения высоты."""
@@ -384,8 +374,6 @@ class JoystickController:
         )
         if updated and new_height is not None:
             self.time_stamp_ry = new_timestamp
-            # Обновляем высоту в auto_stabilization (синхронизация через gait_manager)
-            self.auto_stabilization.init_z_offset = new_height
 
     def joy_callback(self, joy_msg):
         """Главный обработчик сообщений джойстика."""
@@ -469,9 +457,6 @@ class JoystickController:
             rospy.loginfo("Shutting down joystick controller...")
             # Останавливаем робота
             self.gait_manager.stop()
-            # Сбрасываем корректировки стабилизации
-            if hasattr(self, 'auto_stabilization') and self.auto_stabilization is not None:
-                self.auto_stabilization.reset_walking_corrections()
             rospy.loginfo("Robot stopped on shutdown")
         except Exception as e:
             rospy.logerr(f"Error during shutdown: {e}")
