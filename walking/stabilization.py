@@ -75,9 +75,9 @@ class StabilizationModule:
         )
         result.modified = True
         
-        # Логирование для отладки - используем loginfo чтобы точно видеть
-        rospy.loginfo(f"[STABILIZATION] pitch={pitch_deg:.2f}°, roll={roll_deg:.2f}° -> "
-                     f"init_x_offset={init_x_offset:.4f}, init_roll_offset={roll_deg:.2f}°")
+        # Логирование отключено для максимальной скорости (можно включить через logdebug)
+        # rospy.logdebug(f"[STABILIZATION] pitch={pitch_deg:.2f}°, roll={roll_deg:.2f}° -> "
+        #              f"init_x_offset={init_x_offset:.4f}")
         
         # Пример: если нужно переопределить период:
         # result.period_override = WalkingPeriodParams(

@@ -1,4 +1,10 @@
 imu:
+  # Параметры фильтрации IMU (настраиваются в launch/imu.launch)
+  # Для максимальной скорости реакции можно уменьшить gain_acc и bias_alpha
+  # Текущие значения в launch: gain_acc=0.2, bias_alpha=0.2
+  # Меньшие значения = быстрее реакция, но больше шум
+  # Рекомендуемые для быстрой реакции: gain_acc=0.1-0.15, bias_alpha=0.1-0.15
+  
   fall_detection:
     critical_angle_roll: 45.0
     critical_angle_pitch: 45.0
@@ -17,7 +23,7 @@ imu:
     action_timeout: 10.0
     cooldown_duration: 5.0
     actions:
-      fall_forward: 'lie_to_stand'
-      fall_backward: 'BACK_UP'
-      fall_left: 'LEFT_UP'
-      fall_right: 'RIGHT_UP'
+      fall_forward: lie_to_stand
+      fall_backward: BACK_UP
+      fall_left: LEFT_UP
+      fall_right: RIGHT_UP

@@ -106,6 +106,11 @@ class JoystickController:
         self.y_move_amplitude = 0.0
         self.angle_move_amplitude = 0.0
         
+        # Кэш для оптимизации стабилизации
+        self._cached_gait_param = None
+        self._cached_period_time = None
+        self._cached_speed_mode = None
+        
         self.button_handler = ButtonHandler(
             self.board,
             self.gait_manager,
@@ -119,7 +124,8 @@ class JoystickController:
         )
         
         self.joy_sub = rospy.Subscriber('joy', Joy, self.joy_callback)
-        self.imu_sub = rospy.Subscriber('/imu', Imu, self.imu_callback)
+        # queue_size=1 для минимальной задержки (обрабатываем только последние данные)
+        self.imu_sub = rospy.Subscriber('/imu', Imu, self.imu_callback, queue_size=1)
         
         self.health_service = rospy.Service('/game/robot_health', Trigger, self.health_check_service)
         
@@ -201,15 +207,16 @@ class JoystickController:
             return
         
         current_time = rospy.get_time()
-        orientation = imu_data_dict.get('orientation', {})
-        angular_velocity = imu_data_dict.get('angular_velocity', {})
-        linear_acceleration = imu_data_dict.get('linear_acceleration', {})
+        # Прямой доступ к словарям для уменьшения задержки
+        orientation = imu_data_dict['orientation']
+        angular_velocity = imu_data_dict['angular_velocity']
+        linear_acceleration = imu_data_dict['linear_acceleration']
         
-        roll_deg = orientation.get('roll_deg', 0.0)
-        pitch_deg = orientation.get('pitch_deg', 0.0)
-        ax = linear_acceleration.get('x', 0.0)
-        ay = linear_acceleration.get('y', 0.0)
-        az = linear_acceleration.get('z', 0.0)
+        roll_deg = orientation['roll_deg']
+        pitch_deg = orientation['pitch_deg']
+        ax = linear_acceleration['x']
+        ay = linear_acceleration['y']
+        az = linear_acceleration['z']
         
         detected_state = self.fall_detector.detect(
             roll_deg, pitch_deg, ax, ay, az, current_time, self.fall_check_cooldown
@@ -227,11 +234,12 @@ class JoystickController:
                 self.auto_getup.reset()
                 rospy.loginfo("Robot recovered to stand position")
         
+        # Прямой доступ для уменьшения задержки
         imu_data = IMUData(
             orientation={
                 'roll': roll_deg,
                 'pitch': pitch_deg,
-                'yaw': orientation.get('yaw_deg', 0.0)
+                'yaw': orientation['yaw_deg']
             },
             angular_velocity=angular_velocity,
             linear_acceleration=linear_acceleration
@@ -255,25 +263,34 @@ class JoystickController:
         """
         Применяет стабилизацию на основе данных IMU.
         Вызывается постоянно из imu_callback, даже когда робот стоит.
+        Оптимизировано для минимальной задержки.
         """
         try:
-            # Получаем текущие параметры из gait_manager
-            gait_param = self.gait_manager.get_gait_param()
-            
-            # Получаем текущие параметры скорости
+            # Кэшируем параметры для уменьшения вызовов get_gait_param
             speed_mode = self.speed_control.speed_mode
-            if speed_mode in self.speed_control.speed_params:
-                params = self.speed_control.speed_params[speed_mode]
-                period_time = list(params['period_time'])
-                move_amplitudes = {
-                    'x': self.x_move_amplitude,
-                    'y': self.y_move_amplitude,
-                    'angle': self.angle_move_amplitude
-                }
-            else:
-                rospy.logwarn("_apply_stabilization: speed_mode not found, using defaults")
-                period_time = [400, 0.2, 0.02]
-                move_amplitudes = {'x': 0.0, 'y': 0.0, 'angle': 0.0}
+            
+            # Обновляем кэш только если изменился speed_mode
+            if (self._cached_gait_param is None or 
+                self._cached_speed_mode != speed_mode):
+                self._cached_gait_param = self.gait_manager.get_gait_param()
+                self._cached_speed_mode = speed_mode
+                
+                if speed_mode in self.speed_control.speed_params:
+                    params = self.speed_control.speed_params[speed_mode]
+                    self._cached_period_time = list(params['period_time'])
+                else:
+                    self._cached_period_time = [400, 0.2, 0.02]
+            
+            # Используем кэшированные значения
+            gait_param = self._cached_gait_param.copy()  # Копируем для безопасности
+            period_time = self._cached_period_time
+            
+            # Прямое создание словаря без лишних вызовов
+            move_amplitudes = {
+                'x': self.x_move_amplitude,
+                'y': self.y_move_amplitude,
+                'angle': self.angle_move_amplitude
+            }
             
             # Конвертируем в WalkingParams
             current_walking_params = converter.gait_param_to_walking_params(
@@ -301,6 +318,10 @@ class JoystickController:
                 # Конвертируем обратно в gait_param
                 gait_param = converter.walking_params_to_gait_param(current_walking_params)
                 period_time = converter.walking_params_to_period_time(current_walking_params)
+                
+                # Обновляем кэш
+                self._cached_gait_param = gait_param.copy()
+                self._cached_period_time = period_time
                 
                 # Применяем изменения через update_param
                 self.gait_manager.update_param(

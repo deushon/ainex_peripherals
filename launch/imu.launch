@@ -30,9 +30,9 @@
 
     <node name="imu_filter" pkg="imu_complementary_filter" type="complementary_filter_node" >
         <param name="use_mag"             value="$(arg use_mag)"/>
-        <param name="gain_acc"            value="0.2"/>
+        <param name="gain_acc"            value="0.15"/>
         <!--<param name="gain_mag"            value="0.05"/>-->
-        <param name="bias_alpha"          value="0.2"/>
+        <param name="bias_alpha"          value="0.15"/>
         <param name="do_bias_estimation"  value="true"/>
         <param name="do_adaptive_gain"    value="true"/>
         <remap from="imu/data_raw"        to="imu_corrected"/>
