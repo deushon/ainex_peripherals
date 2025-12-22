@@ -81,7 +81,7 @@ class JoystickController:
         
         self.game_services = GameServices(self.robot_id, self.config)
         
-        stabilization_module = StabilizationModule()
+        stabilization_module = StabilizationModule(self.config)
         rospy.loginfo(f"StabilizationModule initialized: enabled={stabilization_module.is_enabled()}")
         self.speed_control = SpeedControl(
             self.gait_manager, self.config, stabilization_module

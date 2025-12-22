@@ -7,7 +7,10 @@
 """
 
 import rospy
+import time
 from typing import Optional
+from simple_pid import PID
+from config import ConfigLoader
 from walking.interfaces import (
     IMUData,
     ThrottleData,
@@ -25,9 +28,55 @@ class StabilizationModule:
     Единственное место переопределения параметров ходьбы и позы робота.
     """
     
-    def __init__(self):
-        """Инициализация модуля стабилизации."""
+    def __init__(self, config_loader=None):
+        """
+        Инициализация модуля стабилизации.
+        
+        Args:
+            config_loader: Экземпляр ConfigLoader (опционально)
+        """
         self.enabled = True
+        self.config = config_loader if config_loader else ConfigLoader()
+        
+        # Загружаем конфигурацию PID
+        walking_config = self.config.load('walking')
+        pid_config = walking_config.get('walking', {}).get('stabilization_pid', {})
+        
+        self.pid_enabled = pid_config.get('enabled', True)
+        self.pid_setpoint = pid_config.get('setpoint', 90.0)
+        
+        # Параметры PID
+        kp = pid_config.get('kp', 0.001)
+        ki = pid_config.get('ki', 0.0)
+        kd = pid_config.get('kd', 0.0)
+        
+        # Пределы выходного сигнала
+        output_limits = (
+            pid_config.get('lower_limit', -0.05),
+            pid_config.get('upper_limit', 0.05)
+        )
+        
+        # Инициализируем PID контроллер
+        if self.pid_enabled:
+            try:
+                self.pid_controller = PID(
+                    Kp=kp,
+                    Ki=ki,
+                    Kd=kd,
+                    setpoint=self.pid_setpoint,
+                    output_limits=output_limits,
+                    sample_time=None  # Обновляем при каждом вызове
+                )
+                self.last_time = None
+                rospy.loginfo(f"PID stabilization enabled: Kp={kp}, Ki={ki}, Kd={kd}, "
+                            f"setpoint={self.pid_setpoint}°, limits={output_limits}")
+            except ImportError:
+                rospy.logerr("simple-pid library not installed! Install with: pip install simple-pid")
+                self.pid_enabled = False
+                self.pid_controller = None
+        else:
+            self.pid_controller = None
+            rospy.loginfo("PID stabilization disabled")
     
     def process(
         self,
@@ -61,23 +110,36 @@ class StabilizationModule:
         
         result = StabilizationResult()
         
-        # Пример: прямая привязка позы к ориентации IMU
         pitch_deg = imu_data.orientation.get('pitch', 0.0)
         roll_deg = imu_data.orientation.get('roll', 0.0)
         
-        # Привязка init_x_offset к pitch (тангаж)
-        # pitch в градусах, делим на 100 для получения разумного диапазона
-        init_x_offset = max(-0.05, min(0.05, -1*(pitch_deg - 90) / 1000.0))
-        
-        result.pose_override = RobotPoseParams(
-            init_x_offset=init_x_offset,
-            #init_roll_offset=roll_deg  # roll в градусах
-        )
-        result.modified = True
-        
-        # Логирование отключено для максимальной скорости (можно включить через logdebug)
-        # rospy.logdebug(f"[STABILIZATION] pitch={pitch_deg:.2f}°, roll={roll_deg:.2f}° -> "
-        #              f"init_x_offset={init_x_offset:.4f}")
+        # Используем PID контроллер для стабилизации по pitch
+        if self.pid_enabled and self.pid_controller is not None:
+            # Вычисляем управляющее воздействие от PID
+            current_time = time.time()
+            if self.last_time is None:
+                self.last_time = current_time
+            
+            # Обновляем sample_time для PID (время с последнего вызова)
+            dt = current_time - self.last_time
+            if dt > 0:
+                self.pid_controller.sample_time = dt
+            
+            # Вычисляем control_effort от PID
+            hip_pitch_offset = self.pid_controller(pitch_deg)
+            self.last_time = current_time
+            
+            result.pose_override = RobotPoseParams(
+                hip_pitch_offset=hip_pitch_offset
+            )
+            result.modified = True
+            
+            # Логирование отключено для максимальной скорости
+            # rospy.logdebug(f"[PID STABILIZATION] pitch={pitch_deg:.2f}°, setpoint={self.pid_setpoint}°, "
+            #              f"control_effort={init_x_offset:.4f}")
+        else:
+            # Если PID отключен, возвращаем без изменений
+            result.modified = False
         
         # Пример: если нужно переопределить период:
         # result.period_override = WalkingPeriodParams(
@@ -99,5 +161,28 @@ class StabilizationModule:
     
     def reset(self):
         """Сбрасывает состояние модуля стабилизации."""
-        pass
+        if self.pid_controller is not None:
+            self.pid_controller.reset()
+        self.last_time = None
+    
+    def update_pid_parameters(self, kp=None, ki=None, kd=None, setpoint=None):
+        """
+        Обновляет параметры PID контроллера во время работы.
+        
+        Args:
+            kp: Пропорциональный коэффициент
+            ki: Интегральный коэффициент
+            kd: Дифференциальный коэффициент
+            setpoint: Целевое значение pitch
+        """
+        if self.pid_controller is not None:
+            if kp is not None:
+                self.pid_controller.Kp = kp
+            if ki is not None:
+                self.pid_controller.Ki = ki
+            if kd is not None:
+                self.pid_controller.Kd = kd
+            if setpoint is not None:
+                self.pid_controller.setpoint = setpoint
+                self.pid_setpoint = setpoint
 
