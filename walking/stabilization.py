@@ -6,6 +6,7 @@
 Если не переопределяет - используются значения из конфигов.
 """
 
+import rospy
 from typing import Optional
 from walking.interfaces import (
     IMUData,
@@ -26,7 +27,7 @@ class StabilizationModule:
     
     def __init__(self):
         """Инициализация модуля стабилизации."""
-        self.enabled = False
+        self.enabled = True
     
     def process(
         self,
@@ -46,19 +47,37 @@ class StabilizationModule:
             StabilizationResult: Результат стабилизации (переопределения или None для использования конфига)
         """
         if not self.enabled:
+            rospy.logwarn("Stabilization module is disabled!")
             return StabilizationResult(modified=False)
         
-        # Здесь будет логика стабилизации пользователя
-        # Пока возвращаем исходные параметры (используем конфиг)
+        # Проверка данных
+        if not imu_data:
+            rospy.logwarn("Stabilization: imu_data is None!")
+            return StabilizationResult(modified=False)
         
-        result = StabilizationResult(modified=False)
+        if not imu_data.orientation:
+            rospy.logwarn("Stabilization: imu_data.orientation is None or empty!")
+            return StabilizationResult(modified=False)
         
-        # Пример: если нужно переопределить позу:
-        # result.pose_override = RobotPoseParams(
-        #     init_roll_offset=some_correction,
-        #     init_pitch_offset=another_correction
-        # )
-        # result.modified = True
+        result = StabilizationResult()
+        
+        # Пример: прямая привязка позы к ориентации IMU
+        pitch_deg = imu_data.orientation.get('pitch', 0.0)
+        roll_deg = imu_data.orientation.get('roll', 0.0)
+        
+        # Привязка init_x_offset к pitch (тангаж)
+        # pitch в градусах, делим на 100 для получения разумного диапазона
+        init_x_offset = max(-0.05, min(0.05, -1*(pitch_deg - 90) / 1000.0))
+        
+        result.pose_override = RobotPoseParams(
+            init_x_offset=init_x_offset,
+            #init_roll_offset=roll_deg  # roll в градусах
+        )
+        result.modified = True
+        
+        # Логирование для отладки - используем loginfo чтобы точно видеть
+        rospy.loginfo(f"[STABILIZATION] pitch={pitch_deg:.2f}°, roll={roll_deg:.2f}° -> "
+                     f"init_x_offset={init_x_offset:.4f}, init_roll_offset={roll_deg:.2f}°")
         
         # Пример: если нужно переопределить период:
         # result.period_override = WalkingPeriodParams(

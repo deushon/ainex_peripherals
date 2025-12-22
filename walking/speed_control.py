@@ -180,6 +180,11 @@ class SpeedControl:
         Returns:
             tuple: (x_move_amplitude, y_move_amplitude, angle_move_amplitude, status)
         """
+        has_movement = any(abs(axes.get(k, 0.0)) > 0.1 for k in ['lx', 'ly', 'rx'])
+        rospy.loginfo(f"SpeedControl.process_axes: called, imu_data={'present' if imu_data else 'None'}, "
+                     f"has_movement={has_movement}, "
+                     f"stabilization.enabled={self.stabilization.is_enabled() if self.stabilization else 'N/A'}")
+        
         x_move_amplitude = 0.0
         y_move_amplitude = 0.0
         angle_move_amplitude = 0.0
@@ -223,8 +228,14 @@ class SpeedControl:
         }
         
         update_param = any(abs(amp) > 0.0 for amp in move_amplitudes.values())
+        stabilization_result = None
         
-        if update_param and imu_data:
+        # Стабилизация должна работать всегда, когда есть данные IMU (даже если робот стоит)
+        if imu_data:
+            rospy.logdebug(f"SpeedControl: processing stabilization, update_param={update_param}, "
+                          f"imu_data.orientation={imu_data.orientation if imu_data else None}")
+        else:
+            rospy.logwarn("SpeedControl: imu_data is None, stabilization will not be called!")
             current_walking_params = converter.gait_param_to_walking_params(
                 gait_param, period_time, move_amplitudes
             )
@@ -239,6 +250,8 @@ class SpeedControl:
                 imu_data, throttle_data, current_walking_params
             )
             
+            rospy.logdebug(f"SpeedControl: stabilization_result.modified={stabilization_result.modified if stabilization_result else False}")
+            
             if stabilization_result.modified:
                 current_walking_params = converter.apply_stabilization_result(
                     current_walking_params, stabilization_result
@@ -246,6 +259,9 @@ class SpeedControl:
                 
                 gait_param = converter.walking_params_to_gait_param(current_walking_params)
                 period_time = converter.walking_params_to_period_time(current_walking_params)
+                
+                # Обновляем move_amplitudes только если они были изменены стабилизацией
+                # (обычно они не меняются, но на всякий случай)
                 move_amplitudes = current_walking_params.move_amplitudes
                 x_move_amplitude = move_amplitudes['x']
                 y_move_amplitude = move_amplitudes['y']
@@ -259,6 +275,13 @@ class SpeedControl:
                 angle_move_amplitude,
                 gait_param,
                 step_num=0
+            )
+        elif stabilization_result and stabilization_result.modified:
+            # Если робот стоит, но стабилизация изменила позу - применяем через update_param
+            self.gait_manager.update_param(
+                period_time,
+                0, 0, 0,
+                gait_param
             )
         
         status = 'move' if update_param else 'stop'

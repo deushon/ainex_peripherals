@@ -20,7 +20,7 @@ from config import ConfigLoader
 from game import GameServices
 from imu import IMUDataHandler
 from robot_state import RobotStateManager, FallDetector, AutoGetup
-from walking import SpeedControl, StabilizationModule, IMUData
+from walking import SpeedControl, StabilizationModule, IMUData, ThrottleData, converter
 from control.button_handler import ButtonHandler
 from control.serial_handler import SerialHandler
 
@@ -82,9 +82,11 @@ class JoystickController:
         self.game_services = GameServices(self.robot_id, self.config)
         
         stabilization_module = StabilizationModule()
+        rospy.loginfo(f"StabilizationModule initialized: enabled={stabilization_module.is_enabled()}")
         self.speed_control = SpeedControl(
             self.gait_manager, self.config, stabilization_module
         )
+        rospy.loginfo(f"SpeedControl initialized with stabilization: enabled={self.speed_control.get_stabilization_module().is_enabled()}")
         
         init_z_offset = init_config.get('z_offset', 0.025)
         self.speed_control.set_body_height(init_z_offset)
@@ -237,6 +239,10 @@ class JoystickController:
         
         self.last_imu_data = imu_data_dict
         
+        # Вызываем стабилизацию прямо здесь, чтобы она работала постоянно
+        # даже когда робот стоит и джойстик не двигается
+        self._apply_stabilization(imu_data)
+        
         self.auto_getup.check(
             detected_state,
             self.motion_manager,
@@ -244,7 +250,70 @@ class JoystickController:
             current_time,
             self.fall_check_cooldown
         )
-        
+    
+    def _apply_stabilization(self, imu_data: IMUData):
+        """
+        Применяет стабилизацию на основе данных IMU.
+        Вызывается постоянно из imu_callback, даже когда робот стоит.
+        """
+        try:
+            # Получаем текущие параметры из gait_manager
+            gait_param = self.gait_manager.get_gait_param()
+            
+            # Получаем текущие параметры скорости
+            speed_mode = self.speed_control.speed_mode
+            if speed_mode in self.speed_control.speed_params:
+                params = self.speed_control.speed_params[speed_mode]
+                period_time = list(params['period_time'])
+                move_amplitudes = {
+                    'x': self.x_move_amplitude,
+                    'y': self.y_move_amplitude,
+                    'angle': self.angle_move_amplitude
+                }
+            else:
+                rospy.logwarn("_apply_stabilization: speed_mode not found, using defaults")
+                period_time = [400, 0.2, 0.02]
+                move_amplitudes = {'x': 0.0, 'y': 0.0, 'angle': 0.0}
+            
+            # Конвертируем в WalkingParams
+            current_walking_params = converter.gait_param_to_walking_params(
+                gait_param, period_time, move_amplitudes
+            )
+            
+            # Создаем ThrottleData (может быть нулевым, если робот стоит)
+            throttle_data = ThrottleData(
+                x=self.x_move_amplitude,
+                y=self.y_move_amplitude,
+                angle=self.angle_move_amplitude
+            )
+            
+            # Вызываем стабилизацию
+            stabilization_result = self.speed_control.get_stabilization_module().process(
+                imu_data, throttle_data, current_walking_params
+            )
+            
+            # Применяем результат, если были изменения
+            if stabilization_result.modified:
+                current_walking_params = converter.apply_stabilization_result(
+                    current_walking_params, stabilization_result
+                )
+                
+                # Конвертируем обратно в gait_param
+                gait_param = converter.walking_params_to_gait_param(current_walking_params)
+                period_time = converter.walking_params_to_period_time(current_walking_params)
+                
+                # Применяем изменения через update_param
+                self.gait_manager.update_param(
+                    period_time,
+                    self.x_move_amplitude,
+                    self.y_move_amplitude,
+                    self.angle_move_amplitude,
+                    gait_param
+                )
+        except Exception as e:
+            rospy.logerr(f"Error in _apply_stabilization: {e}")
+            import traceback
+            rospy.logerr(f"Traceback: {traceback.format_exc()}")
     
     def axes_callback(self, axes):
         """Обработчик осей джойстика."""
@@ -270,6 +339,11 @@ class JoystickController:
                 angular_velocity=angular_velocity,
                 linear_acceleration=linear_acceleration
             )
+            rospy.logdebug(f"JoystickController.axes_callback: IMU data prepared, "
+                          f"pitch={imu_data.orientation.get('pitch', 0.0):.2f}°, "
+                          f"roll={imu_data.orientation.get('roll', 0.0):.2f}°")
+        else:
+            rospy.logwarn("JoystickController.axes_callback: No IMU data available (last_imu_data is None)")
         
         x_move_amp, y_move_amp, angle_move_amp, status = self.speed_control.process_axes(
             axes, imu_data
