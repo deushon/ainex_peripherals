@@ -1,0 +1,23 @@
+imu:
+  fall_detection:
+    critical_angle_roll: 45.0
+    critical_angle_pitch: 45.0
+    critical_angle_duration: 0.5
+    check_rest_enabled: true
+    rest_accel_threshold: 0.5
+    rest_check_duration: 0.3
+    max_history_size: 100
+    sample_rate: 50.0
+  
+  auto_getup:
+    enabled: true
+    fall_time_threshold: 2.0
+    interval: 4.0
+    max_attempts: 2
+    action_timeout: 10.0
+    cooldown_duration: 5.0
+    actions:
+      fall_forward: 'lie_to_stand'
+      fall_backward: 'BACK_UP'
+      fall_left: 'LEFT_UP'
+      fall_right: 'RIGHT_UP'

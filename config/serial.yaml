@@ -1,0 +1,8 @@
+serial:
+  port: "/dev/ttyUSB0"
+  baudrate: 9600
+  reconnect_interval: 5.0
+  read_sleep: 0.01
+  error_sleep: 1.0
+  max_consecutive_errors: 10
+

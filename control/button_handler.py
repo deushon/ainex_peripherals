@@ -4,31 +4,6 @@
 Модуль обработки действий на кнопки джойстика.
 """
 
-# ========== КОНФИГУРАЦИЯ ==========
-# Звук
-SOUND_FILE_PATH = '/usr/share/sounds/alsa/Front_Left.wav'
-SOUND_PLAY_TIMEOUT = 5  # Таймаут воспроизведения звука (сек)
-
-# Управление руками (Square button)
-ARM_DURATION = 0.5  # Длительность движения рук (сек)
-ARM_POSITIONS_PRESSED = [[13, 253], [15, 880], [17, 480], [19, 520]]
-ARM_POSITIONS_RELEASED = [[13, 707], [15, 840], [17, 480], [19, 133]]
-
-# Звуковые сигналы (частота, длительность, пауза, повторения)
-BUZZER_R1_FREQ = 2000  # Частота для R1 (увеличение скорости)
-BUZZER_L1_FREQ = 1500  # Частота для L1 (уменьшение скорости)
-BUZZER_CIRCLE_FREQ = 1500  # Частота для Circle (подъем)
-BUZZER_START_FREQ = 1900  # Частота для Start (сброс высоты)
-BUZZER_DURATION = 0.1  # Длительность сигнала
-BUZZER_PAUSE = 0.05  # Пауза между сигналами
-BUZZER_REPEATS = 1  # Количество повторений
-
-# Высота робота
-HEIGHT_RESET_TARGET = 0.025  # Целевая высота при сбросе
-HEIGHT_RESET_STEP = 0.005  # Шаг изменения высоты при сбросе
-HEIGHT_RESET_DELAY = 0.05  # Задержка между шагами (сек)
-# ===================================
-
 import rospy
 import serial
 import os
@@ -37,19 +12,21 @@ import math
 import time
 from ainex_sdk import Board
 from std_msgs.msg import Bool
+from config import ConfigLoader
 
-# Константы состояний кнопок (совместимость с ButtonState из joystick_control.py)
+
 BUTTON_PRESSED = 1
 BUTTON_RELEASED = 3
 
 
-class ButtonActions:
+class ButtonHandler:
     """
     Класс для обработки действий на кнопки джойстика.
     """
     
     def __init__(self, board, gait_manager, speed_control, motion_manager, 
-                 game_services, serial_getter, robot_state_getter, firing_state_pub=None):
+                 game_services, serial_getter, robot_state_getter, 
+                 firing_state_pub=None, config_loader=None):
         """
         Инициализация модуля действий кнопок.
         
@@ -62,6 +39,7 @@ class ButtonActions:
             serial_getter: Функция для получения serial порта
             robot_state_getter: Функция для получения состояния робота
             firing_state_pub: Публикатор состояния стрельбы (опционально)
+            config_loader: Экземпляр ConfigLoader (опционально)
         """
         self.board = board
         self.gait_manager = gait_manager
@@ -72,39 +50,67 @@ class ButtonActions:
         self.get_robot_state = robot_state_getter
         self.firing_state_pub = firing_state_pub
         
-        # Звук для кнопки X
+        self.config = config_loader if config_loader else ConfigLoader()
+        buttons_config = self.config.load('buttons')
+        buttons_params = buttons_config.get('buttons', {})
+        walking_config = self.config.load('walking')
+        walking_params = walking_config.get('walking', {})
+        
+        actions_config = buttons_params.get('actions', {})
+        self.lie_to_stand_action = actions_config.get('lie_to_stand', 'lie_to_stand')
+        self.recline_to_stand_action = actions_config.get('recline_to_stand', 'recline_to_stand')
+        
+        sound_config = buttons_params.get('sound', {})
+        self.sound_file_path = sound_config.get('file_path', '/usr/share/sounds/alsa/Front_Left.wav')
+        self.sound_play_timeout = sound_config.get('play_timeout', 5)
+        
+        arm_config = buttons_params.get('arm', {})
+        self.arm_duration = arm_config.get('duration', 0.5)
+        self.arm_positions_pressed = arm_config.get('positions_pressed', [[13, 253], [15, 880], [17, 480], [19, 520]])
+        self.arm_positions_released = arm_config.get('positions_released', [[13, 707], [15, 840], [17, 480], [19, 133]])
+        
+        buzzer_config = buttons_params.get('buzzer', {})
+        self.buzzer_r1_freq = buzzer_config.get('r1_freq', 2000)
+        self.buzzer_l1_freq = buzzer_config.get('l1_freq', 1500)
+        self.buzzer_circle_freq = buzzer_config.get('circle_freq', 1500)
+        self.buzzer_start_freq = buzzer_config.get('start_freq', 1900)
+        self.buzzer_duration = buzzer_config.get('duration', 0.1)
+        self.buzzer_pause = buzzer_config.get('pause', 0.05)
+        self.buzzer_repeats = buzzer_config.get('repeats', 1)
+        
+        height_reset_config = walking_params.get('height', {}).get('reset', {})
+        self.height_reset_target = height_reset_config.get('target', 0.025)
+        self.height_reset_step = height_reset_config.get('step', 0.005)
+        self.height_reset_delay = height_reset_config.get('delay', 0.05)
+        
         self.sound = None
-        self.sound_file_path = None
         self._setup_sound()
         
-        rospy.loginfo("ButtonActions module initialized")
+        rospy.loginfo("ButtonHandler module initialized")
     
     def _setup_sound(self):
         """Настройка звука для кнопки X."""
         try:
             import pygame
-            if os.path.exists(SOUND_FILE_PATH):
+            if os.path.exists(self.sound_file_path):
                 pygame.mixer.init()
-                self.sound = pygame.mixer.Sound(SOUND_FILE_PATH)
-            else:
-                self.sound_file_path = SOUND_FILE_PATH
-        except Exception as e:
-            rospy.logdebug(f"Could not initialize pygame sound: {e}")
-            self.sound_file_path = SOUND_FILE_PATH
+                self.sound = pygame.mixer.Sound(self.sound_file_path)
+        except Exception:
+            pass
     
     def r1_callback(self, new_state):
         """Обработчик кнопки R1 - увеличение скорости."""
         if new_state == BUTTON_PRESSED and self.speed_control.get_speed_mode() < 4:
             new_mode = self.speed_control.get_speed_mode() + 1
             self.speed_control.set_speed_mode(new_mode)
-            self.board.set_buzzer(BUZZER_R1_FREQ, BUZZER_DURATION, BUZZER_PAUSE, BUZZER_REPEATS)
+            self.board.set_buzzer(self.buzzer_r1_freq, self.buzzer_duration, self.buzzer_pause, self.buzzer_repeats)
     
     def l1_callback(self, new_state):
         """Обработчик кнопки L1 - уменьшение скорости."""
         if new_state == BUTTON_PRESSED and self.speed_control.get_speed_mode() > 1:
             new_mode = self.speed_control.get_speed_mode() - 1
             self.speed_control.set_speed_mode(new_mode)
-            self.board.set_buzzer(BUZZER_L1_FREQ, BUZZER_DURATION, BUZZER_PAUSE, BUZZER_REPEATS)
+            self.board.set_buzzer(self.buzzer_l1_freq, self.buzzer_duration, self.buzzer_pause, self.buzzer_repeats)
     
     def cross_callback(self, new_state):
         """Обработчик кнопки Cross - стрельба."""
@@ -115,13 +121,11 @@ class ButtonActions:
         
         ser = self.get_serial_port()
         if ser is None or not ser.is_open:
-            rospy.logwarn("Cannot send firing command: Arduino not connected.")
+            rospy.logwarn("Cannot send firing command: Arduino not connected")
             return
         
         try:
             if new_state == BUTTON_PRESSED:
-                # Публикуем состояние стрельбы СРАЗУ (до отправки команды в Arduino)
-                # Это важно для backend, который валидирует попадания
                 if self.firing_state_pub is not None:
                     firing_msg = Bool()
                     firing_msg.data = True
@@ -129,7 +133,6 @@ class ButtonActions:
                 ser.write(b"FIRE\n")
                 rospy.loginfo("Firing started")
             elif new_state == BUTTON_RELEASED:
-                # Публикуем состояние стрельбы СРАЗУ (до отправки команды в Arduino)
                 if self.firing_state_pub is not None:
                     firing_msg = Bool()
                     firing_msg.data = False
@@ -155,7 +158,7 @@ class ButtonActions:
                                 [cmd, self.sound_file_path],
                                 stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL,
-                                timeout=SOUND_PLAY_TIMEOUT
+                                timeout=self.sound_play_timeout
                             )
                             break
                         except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -166,52 +169,50 @@ class ButtonActions:
     def square_callback(self, new_state):
         """Обработчик кнопки Square - управление руками."""
         if new_state == BUTTON_PRESSED:
-            self.board.bus_servo_set_position(ARM_DURATION, ARM_POSITIONS_PRESSED)
+            self.board.bus_servo_set_position(self.arm_duration, self.arm_positions_pressed)
         elif new_state == BUTTON_RELEASED:
-            self.board.bus_servo_set_position(ARM_DURATION, ARM_POSITIONS_RELEASED)
+            self.board.bus_servo_set_position(self.arm_duration, self.arm_positions_released)
     
     def circle_callback(self, new_state):
         """Обработчик кнопки Circle - подъем робота."""
         if new_state == BUTTON_PRESSED:
             robot_state = self.get_robot_state()
-            rospy.loginfo(f"Circle (B) button pressed. Current robot state: '{robot_state}'.")
+            rospy.loginfo(f"Circle button pressed. Current robot state: '{robot_state}'")
             
             if robot_state == 'stand':
-                rospy.loginfo("Robot is already in a 'stand' state. No get-up action will be performed.")
-                self.board.set_buzzer(BUZZER_CIRCLE_FREQ, BUZZER_DURATION, BUZZER_PAUSE, BUZZER_REPEATS)
+                rospy.loginfo("Robot is already in a 'stand' state. No get-up action will be performed")
+                self.board.set_buzzer(self.buzzer_circle_freq, self.buzzer_duration, self.buzzer_pause, self.buzzer_repeats)
                 return
             
             action_to_run = None
             if robot_state == 'lie_to_stand':
-                action_to_run = 'lie_to_stand'
+                action_to_run = self.lie_to_stand_action
             elif robot_state == 'recline_to_stand':
-                action_to_run = 'recline_to_stand'
+                action_to_run = self.recline_to_stand_action
             
-            rospy.loginfo(f"Initiating {action_to_run}.")
-            self.board.set_buzzer(BUZZER_CIRCLE_FREQ, BUZZER_DURATION, BUZZER_PAUSE, BUZZER_REPEATS)
+            rospy.loginfo(f"Initiating {action_to_run}")
+            self.board.set_buzzer(self.buzzer_circle_freq, self.buzzer_duration, self.buzzer_pause, self.buzzer_repeats)
             
             try:
                 if self.motion_manager is not None and action_to_run:
                     self.motion_manager.run_action(action_to_run)
-                    rospy.loginfo(f"Action '{action_to_run}' initiated successfully.")
+                    rospy.loginfo(f"Action '{action_to_run}' initiated successfully")
                 else:
-                    rospy.logwarn("MotionManager not initialized or no action specified.")
+                    rospy.logwarn("MotionManager not initialized or no action specified")
             except Exception as e:
                 rospy.logerr(f"Error calling MotionManager.run_action('{action_to_run}'): {e}")
     
     def start_callback(self, new_state, height_getter, height_setter):
         """Обработчик кнопки Start - сброс высоты робота."""
         if new_state == BUTTON_PRESSED:
-            rospy.loginfo("Start button pressed. Resetting body height.")
-            self.board.set_buzzer(BUZZER_START_FREQ, BUZZER_DURATION, BUZZER_PAUSE, BUZZER_REPEATS)
-            # reset_height теперь использует единый источник истины через speed_control
-            new_height = self.reset_height(HEIGHT_RESET_TARGET)
+            rospy.loginfo("Start button pressed. Resetting body height")
+            self.board.set_buzzer(self.buzzer_start_freq, self.buzzer_duration, self.buzzer_pause, self.buzzer_repeats)
+            new_height = self._reset_height(self.height_reset_target)
             height_setter(new_height)
     
-    def reset_height(self, target_height=HEIGHT_RESET_TARGET):
+    def _reset_height(self, target_height):
         """
         Сбрасывает высоту робота до целевого значения.
-        Использует единый метод set_body_height из speed_control.
         
         Args:
             target_height: Целевая высота
@@ -219,15 +220,15 @@ class ButtonActions:
         Returns:
             float: Новое значение высоты
         """
-        # Получаем текущую высоту из gait_manager через speed_control
         current_height = self.speed_control.get_body_height()
-        t = int(abs(target_height - current_height) / HEIGHT_RESET_STEP)
-        if t != 0:
-            direction = math.copysign(1, target_height - current_height)
-            for _ in range(t):
-                current_height += HEIGHT_RESET_STEP * direction
-                # Используем единый метод для установки высоты
+        steps = int(abs(target_height - current_height) / self.height_reset_step)
+        
+        if steps != 0:
+            direction = math.copysign(1.0, target_height - current_height)
+            for _ in range(steps):
+                current_height += self.height_reset_step * direction
                 self.speed_control.set_body_height(current_height)
-                time.sleep(HEIGHT_RESET_DELAY)
+                time.sleep(self.height_reset_delay)
+        
         return self.speed_control.get_body_height()
 

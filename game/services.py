@@ -4,15 +4,11 @@
 Модуль сервисов для игры: HP, урон, разрешения, статус матча.
 """
 
-# ========== КОНФИГУРАЦИЯ ==========
-MAX_HP = 100  # Максимальное HP робота
-HP_PUBLISH_INTERVAL = 0.5  # Интервал публикации HP (секунды)
-# ===================================
-
 import rospy
 import json
 from std_msgs.msg import String, Int32, Bool
 from std_srvs.srv import Trigger, TriggerResponse
+from config import ConfigLoader
 
 
 class GameServices:
@@ -20,20 +16,24 @@ class GameServices:
     Класс для управления игровыми сервисами: HP, урон, разрешения.
     """
     
-    def __init__(self, robot_id):
+    def __init__(self, robot_id, config_loader=None):
         """
         Инициализация модуля игровых сервисов.
         
         Args:
             robot_id: ID робота
+            config_loader: Экземпляр ConfigLoader (опционально)
         """
         self.robot_id = robot_id
+        self.config = config_loader if config_loader else ConfigLoader()
+        game_config = self.config.load('game')
         
-        # Состояние HP
-        self.max_hp = MAX_HP
-        self.current_hp = MAX_HP
+        max_hp = game_config.get('game', {}).get('max_hp', 100)
+        hp_publish_interval = game_config.get('game', {}).get('hp_publish_interval', 0.5)
         
-        # Система разрешений
+        self.max_hp = max_hp
+        self.current_hp = max_hp
+        
         self.permissions = {
             'movement': False,
             'head': True,
@@ -41,23 +41,19 @@ class GameServices:
             'camera': True
         }
         self.use_detailed_permissions = False
-        self.is_locked = False  # Legacy флаг
+        self.is_locked = False
         
-        # Публикаторы
         self.hp_pub = rospy.Publisher('/game/robot_hp', Int32, queue_size=10)
         self.robot_status_pub = rospy.Publisher('/game/robot_status', String, queue_size=10)
         
-        # Подписчики
         self.damage_sub = rospy.Subscriber('/game/validated_damage', Int32, self.damage_callback)
         self.control_permissions_sub = rospy.Subscriber('/game/control_permissions', String, self.control_permissions_callback)
         self.control_lock_sub = rospy.Subscriber('/game/control_lock', Bool, self.control_lock_callback)
         self.match_start_sub = rospy.Subscriber('/game/match_start', Bool, self.match_start_callback)
         
-        # Сервисы
         self.reset_hp_service = rospy.Service('/game/reset_hp', Trigger, self.reset_hp_service_handler)
         
-        # Таймер для периодической публикации HP
-        rospy.Timer(rospy.Duration(HP_PUBLISH_INTERVAL), self.publish_hp_status)
+        rospy.Timer(rospy.Duration(hp_publish_interval), self.publish_hp_status)
         
         rospy.loginfo(f"GameServices initialized for robot: {self.robot_id}")
     
@@ -70,24 +66,22 @@ class GameServices:
         old_hp = self.current_hp
         self.current_hp = max(0, self.current_hp - damage_amount)
         
-        rospy.loginfo(f"💥 Damage received: {damage_amount}, HP: {old_hp} → {self.current_hp}")
+        rospy.loginfo(f"Damage received: {damage_amount}, HP: {old_hp} -> {self.current_hp}")
         
-        # Публикуем обновленное HP
         hp_msg = Int32()
         hp_msg.data = self.current_hp
         self.hp_pub.publish(hp_msg)
         
-        # Если HP достигло 0, блокируем робота
         if self.current_hp <= 0:
             self.is_locked = True
             self.permissions['movement'] = False
             self.permissions['head'] = False
             self.permissions['firing'] = False
             self.permissions['camera'] = True
-            rospy.logwarn(f"💀 Robot HP reached 0, locking robot")
+            rospy.logwarn(f"Robot HP reached 0, locking robot")
             self.publish_robot_status("hp_zero_locked")
         
-        return self.current_hp <= 0  # Возвращаем True если HP = 0
+        return self.current_hp <= 0
     
     def control_permissions_callback(self, msg):
         """Обработчик детальных разрешений от сервера."""
@@ -139,7 +133,7 @@ class GameServices:
     def match_start_callback(self, msg):
         """Обработчик начала нового матча."""
         if msg.data:
-            rospy.loginfo("🎮 Match started, resetting HP")
+            rospy.loginfo("Match started, resetting HP")
             self.reset_hp()
     
     def reset_hp(self):
@@ -148,9 +142,8 @@ class GameServices:
         hp_msg = Int32()
         hp_msg.data = self.current_hp
         self.hp_pub.publish(hp_msg)
-        rospy.loginfo(f"💚 HP reset to {self.max_hp}")
+        rospy.loginfo(f"HP reset to {self.max_hp}")
         
-        # Разблокировать робота при сбросе HP
         self.is_locked = False
         self.permissions = {
             'movement': True,
@@ -218,5 +211,4 @@ class GameServices:
         if self.use_detailed_permissions:
             return self.permissions['camera']
         else:
-            return True  # Камера всегда доступна в legacy режиме
-
+            return True

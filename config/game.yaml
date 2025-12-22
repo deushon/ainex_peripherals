@@ -1,0 +1,4 @@
+game:
+  robot_id: "robot_1"
+  max_hp: 100
+  hp_publish_interval: 0.5

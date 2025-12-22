@@ -1,0 +1,75 @@
+walking:
+  axis_threshold: 0.3
+  height:
+    axis_threshold: 0.5
+    update_interval: 0.05
+    step: 0.005
+    min: 0.025
+    max: 0.06
+    default: 0.025
+    reset:
+      target: 0.025
+      step: 0.005
+      delay: 0.05
+  
+  speed_modes:
+    1:
+      name: "Very Low Speed"
+      period_time: [600, 0.2, 0.02]
+      move_amplitudes:
+        x: 0.01
+        y: 0.01
+        angle: 10.0
+      z_move_amplitude: 0.02
+      arm_swap: 30.0
+      gait_base:
+        step_fb_ratio: 0.028
+        z_swap_amplitude: 0.006
+        hip_pitch_offset: 15.0
+        pelvis_offset: 5.0
+    
+    2:
+      name: "Low Speed"
+      period_time: [500, 0.2, 0.02]
+      move_amplitudes:
+        x: 0.01
+        y: 0.01
+        angle: 10.0
+      z_move_amplitude: 0.02
+      arm_swap: 30.0
+      gait_base:
+        step_fb_ratio: 0.028
+        z_swap_amplitude: 0.006
+        hip_pitch_offset: 15.0
+        pelvis_offset: 5.0
+    
+    3:
+      name: "Medium Speed"
+      period_time: [400, 0.2, 0.02]
+      move_amplitudes:
+        x: 0.01
+        y: 0.01
+        angle: 8.0
+      z_move_amplitude: 0.02
+      arm_swap: 30.0
+      gait_base:
+        step_fb_ratio: 0.028
+        z_swap_amplitude: 0.006
+        hip_pitch_offset: 15.0
+        pelvis_offset: 5.0
+    
+    4:
+      name: "High Speed"
+      period_time: [300, 0.2, 0.021]
+      move_amplitudes:
+        x: 0.01
+        y: 0.01
+        angle: 8.0
+      z_move_amplitude: 0.015
+      arm_swap: 30.0
+      gait_base:
+        step_fb_ratio: 0.028
+        z_swap_amplitude: 0.006
+        hip_pitch_offset: 15.0
+        pelvis_offset: 5.0
+

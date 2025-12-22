@@ -1,0 +1,22 @@
+buttons:
+  sound:
+    file_path: '/usr/share/sounds/alsa/Front_Left.wav'
+    play_timeout: 5
+  
+  arm:
+    duration: 0.5
+    positions_pressed: [[13, 253], [15, 880], [17, 480], [19, 520]]
+    positions_released: [[13, 707], [15, 840], [17, 480], [19, 133]]
+  
+  buzzer:
+    r1_freq: 2000
+    l1_freq: 1500
+    circle_freq: 1500
+    start_freq: 1900
+    duration: 0.1
+    pause: 0.05
+    repeats: 1
+  
+  actions:
+    lie_to_stand: 'lie_to_stand'
+    recline_to_stand: 'recline_to_stand'

@@ -1,0 +1,12 @@
+joystick:
+  axes_map: ['lx', 'ly', 'rx', 'ry', 'r2', 'l2', 'hat_x', 'hat_y']
+  button_map: ['cross', 'circle', 'x_button', 'square', 'triangle', '', 'l1', 'r1', 'l2', 'r2', 'select', 'start', '', 'l3', 'r3', '', 'hat_xl', 'hat_xr', 'hat_yu', 'hat_yd', '']
+
+initialization:
+  z_offset: 0.025
+  delay: 0.2
+
+joystick_driver:
+  dev: "/dev/input/js0"
+  autorepeat_rate: 20.0
+  coalesce_interval: 0.05
