@@ -1,0 +1,4 @@
+stabilization_pid:
+  calibrated_kp: 0.045085678888918304
+  calibrated_ki: 0.12810347179722903
+  calibrated_kd: 0.009100004734664022

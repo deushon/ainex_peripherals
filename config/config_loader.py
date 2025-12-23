@@ -108,9 +108,17 @@ class ConfigLoader:
             else:
                 merged_config = config_data
             
-            # Сохраняем в файл
-            with open(config_path, 'w') as f:
+            # Конвертируем numpy типы и другие несериализуемые типы в стандартные Python типы
+            merged_config = self._convert_to_yaml_safe_types(merged_config)
+            
+            # Сохраняем в файл (создаем временный файл для безопасности)
+            temp_path = config_path + '.tmp'
+            with open(temp_path, 'w') as f:
                 yaml.safe_dump(merged_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            
+            # Если сохранение успешно, заменяем оригинальный файл
+            import shutil
+            shutil.move(temp_path, config_path)
             
             # Обновляем кэш
             self._cache[config_name] = merged_config
@@ -122,10 +130,21 @@ class ConfigLoader:
             
             return True
         except Exception as e:
+            # Удаляем временный файл при ошибке
+            temp_path = config_path + '.tmp'
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
             try:
                 rospy.logerr(f"Error saving config {config_name}: {e}")
+                import traceback
+                rospy.logerr(traceback.format_exc())
             except Exception:
                 print(f"Error saving config {config_name}: {e}")
+                import traceback
+                print(traceback.format_exc())
             return False
     
     def _deep_merge(self, base, update):
@@ -148,6 +167,34 @@ class ConfigLoader:
                 result[key] = value
         
         return result
+    
+    def _convert_to_yaml_safe_types(self, obj):
+        """
+        Рекурсивно конвертирует numpy типы и другие несериализуемые типы
+        в стандартные Python типы для YAML.
+        
+        Args:
+            obj: Объект для конвертации
+        
+        Returns:
+            Конвертированный объект
+        """
+        import numpy as np
+        
+        if isinstance(obj, dict):
+            return {key: self._convert_to_yaml_safe_types(value) for key, value in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self._convert_to_yaml_safe_types(item) for item in obj]
+        elif isinstance(obj, (np.integer, np.floating)):
+            # Конвертируем numpy числовые типы в стандартные Python типы
+            return float(obj) if isinstance(obj, np.floating) else int(obj)
+        elif isinstance(obj, np.ndarray):
+            # Конвертируем numpy массивы в списки
+            return obj.tolist()
+        elif hasattr(obj, 'item'):  # numpy scalar types
+            return obj.item()
+        else:
+            return obj
     
     def set(self, config_name, key_path, value):
         """
