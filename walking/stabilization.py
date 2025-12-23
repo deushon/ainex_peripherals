@@ -130,20 +130,6 @@ class StabilizationModule:
             pid_output = self.pid_controller(pitch_deg)
             self.last_time = current_time
             
-            # Вычисляем init_x_offset на основе PID выхода (стабилизация по pitch)
-            init_y_offset = 0.03
-            
-            # Вычисляем init_y_offset на основе roll (стабилизация по roll)
-            # Используем пропорциональную коррекцию, аналогичную PID
-            
-            # Обновляем pose_override с init_x_offset и init_y_offset
-            result.pose_override = RobotPoseParams(
-                init_x_offset=current_walking_params.pose.init_x_offset,
-                init_y_offset=init_y_offset,
-                init_roll_offset=current_walking_params.pose.init_roll_offset,
-                init_pitch_offset=current_walking_params.pose.init_pitch_offset
-            )
-            
             # Обновляем hip_pitch_offset в gait_base
             hip_pitch_offset = 15 - pid_output
             

@@ -6,10 +6,10 @@ walking:
   stabilization_pid:
     enabled: true
     # Целевое значение pitch (обычно 90° для вертикального положения)
-    setpoint: 76.0
+    setpoint: 84.0
     # Коэффициенты PID
     kp: 0.007     # Пропорциональный коэффициент (начните с малых значений)
-    ki: 0.08       # Интегральный коэффициент (0 для начала, затем увеличивайте при необходимости)
+    ki: 0.087       # Интегральный коэффициент (0 для начала, затем увеличивайте при необходимости)
     kd: 0.001       # Дифференциальный коэффициент (0 для начала, затем увеличивайте для уменьшения колебаний)
     # Пределы выходного сигнала (init_x_offset)
     upper_limit: 15.05   # Максимальное смещение по X
@@ -30,33 +30,42 @@ walking:
   speed_modes:
     1:
       name: "Very Low Speed"
-      period_time: [600, 0.2, 0.02]
+      period_time: [400, 0.5, 0.02]
       move_amplitudes:
-        x: 0.01
-        y: 0.01
+        x: -0.01
+        y: 0.012
         angle: 10.0
-      z_move_amplitude: 0.02
+      z_move_amplitude: 0.025
       arm_swap: 30.0
       gait_base:
-        step_fb_ratio: 0.028
-        z_swap_amplitude: 0.006
-        hip_pitch_offset: 15.0
+        step_fb_ratio: 0.070
+        z_swap_amplitude: 0.002
+        init_y_offset: 0.03
+        body_height: 0.04
+        init_x_offset: 0.0
+        init_roll_offset: 0.0
         pelvis_offset: 5.0
+        step_height: 0.023
     
     2:
       name: "Low Speed"
-      period_time: [500, 0.2, 0.02]
+      period_time: [280, 0.48, 0.02]
       move_amplitudes:
         x: 0.01
-        y: 0.01
+        y: 0.012
         angle: 10.0
-      z_move_amplitude: 0.02
+      z_move_amplitude: 0.025
       arm_swap: 30.0
       gait_base:
-        step_fb_ratio: 0.028
-        z_swap_amplitude: 0.006
-        hip_pitch_offset: 15.0
+        step_fb_ratio: 0.090
+        z_swap_amplitude: 0.002
+        init_y_offset: 0.03
+        body_height: 0.04
+        init_x_offset: 0.0
+        init_roll_offset: 0.0
+
         pelvis_offset: 5.0
+        step_height: 0.026
     
     3:
       name: "Medium Speed"
@@ -70,7 +79,6 @@ walking:
       gait_base:
         step_fb_ratio: 0.028
         z_swap_amplitude: 0.006
-        hip_pitch_offset: 15.0
         pelvis_offset: 5.0
     
     4:
@@ -85,6 +93,5 @@ walking:
       gait_base:
         step_fb_ratio: 0.028
         z_swap_amplitude: 0.006
-        hip_pitch_offset: 15.0
         pelvis_offset: 5.0
 
