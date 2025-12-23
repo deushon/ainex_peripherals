@@ -20,7 +20,7 @@ from config import ConfigLoader
 from game import GameServices
 from imu import IMUDataHandler
 from robot_state import RobotStateManager, FallDetector, AutoGetup
-from walking import SpeedControl, StabilizationModule, IMUData, ThrottleData, converter
+from walking import SpeedControl, StabilizationModule, IMUData
 from control.button_handler import ButtonHandler
 from control.serial_handler import SerialHandler
 
@@ -110,10 +110,7 @@ class JoystickController:
         self.last_command_time = rospy.get_time()
         self.command_timeout = 0.3  # Таймаут в секундах (300 мс)
         
-        # Кэш для оптимизации стабилизации
-        self._cached_gait_param = None
-        self._cached_period_time = None
-        self._cached_speed_mode = None
+        # Кэш больше не нужен - стабилизация применяется только в process_axes()
         
         self.button_handler = ButtonHandler(
             self.board,
@@ -275,9 +272,9 @@ class JoystickController:
         
         self.last_imu_data = imu_data_dict
         
-        # Вызываем стабилизацию прямо здесь, чтобы она работала постоянно
-        # даже когда робот стоит и джойстик не двигается
-        self._apply_stabilization(imu_data)
+        # ВАЖНО: Стабилизация НЕ вызывается здесь!
+        # Стабилизация применяется только в axes_callback() вместе с командами движения
+        # Это предотвращает конфликты - все команды движения в одном месте
         
         self.auto_getup.check(
             detected_state,
@@ -287,85 +284,11 @@ class JoystickController:
             self.fall_check_cooldown
         )
     
-    def _apply_stabilization(self, imu_data: IMUData):
-        """
-        Применяет стабилизацию на основе данных IMU.
-        Вызывается постоянно из imu_callback, даже когда робот стоит.
-        Оптимизировано для минимальной задержки.
-        """
-        try:
-            # Кэшируем параметры для уменьшения вызовов get_gait_param
-            speed_mode = self.speed_control.speed_mode
-            
-            # Обновляем кэш только если изменился speed_mode
-            if (self._cached_gait_param is None or 
-                self._cached_speed_mode != speed_mode):
-                self._cached_gait_param = self.gait_manager.get_gait_param()
-                self._cached_speed_mode = speed_mode
-                
-                if speed_mode in self.speed_control.speed_params:
-                    params = self.speed_control.speed_params[speed_mode]
-                    self._cached_period_time = list(params['period_time'])
-                else:
-                    self._cached_period_time = [400, 0.2, 0.02]
-            
-            # Используем кэшированные значения
-            gait_param = self._cached_gait_param.copy()  # Копируем для безопасности
-            period_time = self._cached_period_time
-            
-            # Прямое создание словаря без лишних вызовов
-            move_amplitudes = {
-                'x': self.x_move_amplitude,
-                'y': self.y_move_amplitude,
-                'angle': self.angle_move_amplitude
-            }
-            
-            # Конвертируем в WalkingParams
-            current_walking_params = converter.gait_param_to_walking_params(
-                gait_param, period_time, move_amplitudes
-            )
-            
-            # Создаем ThrottleData (может быть нулевым, если робот стоит)
-            throttle_data = ThrottleData(
-                x=self.x_move_amplitude,
-                y=self.y_move_amplitude,
-                angle=self.angle_move_amplitude
-            )
-            
-            # Вызываем стабилизацию
-            stabilization_result = self.speed_control.get_stabilization_module().process(
-                imu_data, throttle_data, current_walking_params
-            )
-            
-            # Применяем результат, если были изменения
-            if stabilization_result.modified:
-                current_walking_params = converter.apply_stabilization_result(
-                    current_walking_params, stabilization_result
-                )
-                
-                # Конвертируем обратно в gait_param
-                gait_param = converter.walking_params_to_gait_param(current_walking_params)
-                period_time = converter.walking_params_to_period_time(current_walking_params)
-                
-                # Обновляем кэш
-                self._cached_gait_param = gait_param.copy()
-                self._cached_period_time = period_time
-                
-                # Применяем изменения через update_param
-                self.gait_manager.update_param(
-                    period_time,
-                    self.x_move_amplitude,
-                    self.y_move_amplitude,
-                    self.angle_move_amplitude,
-                    gait_param
-                )
-        except Exception as e:
-            rospy.logerr(f"Error in _apply_stabilization: {e}")
-            import traceback
-            rospy.logerr(f"Traceback: {traceback.format_exc()}")
-    
     def axes_callback(self, axes):
-        """Обработчик осей джойстика."""
+        """
+        Обработчик осей джойстика.
+        ЕДИНСТВЕННОЕ место установки команд движения - как в старой рабочей версии.
+        """
         if not self.game_services.can_move():
             if self.status == 'move':
                 self.status = 'stop'
@@ -373,6 +296,7 @@ class JoystickController:
                 rospy.logwarn("Movement command blocked - no permission")
             return
         
+        # Подготавливаем данные IMU для стабилизации (если есть)
         imu_data = None
         if self.last_imu_data:
             orientation = self.last_imu_data.get('orientation', {})
@@ -388,14 +312,12 @@ class JoystickController:
                 angular_velocity=angular_velocity,
                 linear_acceleration=linear_acceleration
             )
-            rospy.logdebug(f"JoystickController.axes_callback: IMU data prepared, "
-                          f"pitch={imu_data.orientation.get('pitch', 0.0):.2f}°, "
-                          f"roll={imu_data.orientation.get('roll', 0.0):.2f}°")
-        else:
-            rospy.logwarn("JoystickController.axes_callback: No IMU data available (last_imu_data is None)")
         
+        # ЕДИНСТВЕННОЕ место установки команд движения
+        # Стабилизация применяется ВНУТРИ process_axes()
+        # Передаем предыдущий статус для определения переходов
         x_move_amp, y_move_amp, angle_move_amp, status = self.speed_control.process_axes(
-            axes, imu_data
+            axes, imu_data, previous_status=self.status
         )
         
         self.x_move_amplitude = x_move_amp
@@ -421,18 +343,13 @@ class JoystickController:
         
         axes_changed = any(self.last_axes.get(key, 0.0) != value for key, value in axes.items())
         
-        # Проверяем, все ли оси в нулевом положении (с учетом порога)
-        all_axes_zero = all(abs(axes.get(k, 0.0)) < 0.1 for k in ['lx', 'ly', 'rx'])
-        
-        # Вызываем axes_callback если:
-        # 1. Оси изменились ИЛИ
-        # 2. Все оси нулевые, но робот еще движется (нужно остановить)
-        if axes_changed or (all_axes_zero and self.status == 'move'):
-            try:
-                self.axes_callback(axes)
-                self.height_callback(axes)
-            except Exception as e:
-                rospy.logerr(f"Error in axes processing: {str(e)}")
+        # ВСЕГДА вызываем axes_callback для постоянного обновления параметров и стабилизации
+        # Это нужно для работы стабилизации во время покоя
+        try:
+            self.axes_callback(axes)
+            self.height_callback(axes)
+        except Exception as e:
+            rospy.logerr(f"Error in axes processing: {str(e)}")
         
         for key, value in buttons.items():
             if not key:
