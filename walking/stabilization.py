@@ -126,11 +126,20 @@ class StabilizationModule:
                 self.pid_controller.sample_time = dt
             
             # Вычисляем control_effort от PID
-            hip_pitch_offset = self.pid_controller(pitch_deg)
+            pid_output = self.pid_controller(pitch_deg)
             self.last_time = current_time
             
-            result.pose_override = RobotPoseParams(
-                hip_pitch_offset=hip_pitch_offset
+            # Обновляем hip_pitch_offset в gait_base (по аналогии с init_x_offset в pose)
+            # Добавляем PID выход к базовому значению hip_pitch_offset
+            init_y_offset = 0.03
+            hip_pitch_offset = 15 - pid_output
+            
+            result.gait_base_override = GaitBaseParams(
+                body_height=current_walking_params.gait_base.body_height,
+                step_fb_ratio=current_walking_params.gait_base.step_fb_ratio,
+                z_swap_amplitude=current_walking_params.gait_base.z_swap_amplitude,
+                hip_pitch_offset=hip_pitch_offset,
+                pelvis_offset=current_walking_params.gait_base.pelvis_offset
             )
             result.modified = True
             

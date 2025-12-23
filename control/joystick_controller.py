@@ -106,6 +106,10 @@ class JoystickController:
         self.y_move_amplitude = 0.0
         self.angle_move_amplitude = 0.0
         
+        # Watchdog для автоматической остановки при отсутствии команд
+        self.last_command_time = rospy.get_time()
+        self.command_timeout = 0.3  # Таймаут в секундах (300 мс)
+        
         # Кэш для оптимизации стабилизации
         self._cached_gait_param = None
         self._cached_period_time = None
@@ -133,6 +137,9 @@ class JoystickController:
             rospy.Duration(self.serial_handler.reconnect_interval),
             self._check_and_reconnect_serial
         )
+        
+        # Watchdog таймер для проверки команд движения (проверка каждые 0.1 секунды)
+        rospy.Timer(rospy.Duration(0.1), self._watchdog_check)
         
         rospy.on_shutdown(self._shutdown_handler)
         
@@ -172,6 +179,27 @@ class JoystickController:
         """Периодически проверяет serial соединение и пытается переподключиться."""
         if not self.serial_handler.is_connected():
             self.serial_handler.reconnect()
+    
+    def _watchdog_check(self, event):
+        """
+        Watchdog проверка: останавливает робота, если команды не приходят слишком долго.
+        Это предотвращает ситуацию, когда робот продолжает двигаться после
+        прекращения команд (например, если джойстик отключился или нода зависла).
+        """
+        current_time = rospy.get_time()
+        time_since_last_command = current_time - self.last_command_time
+        
+        # Если прошло слишком много времени с последней команды и робот движется - останавливаем
+        if time_since_last_command > self.command_timeout and self.status == 'move':
+            rospy.logwarn(f"Watchdog: No movement commands for {time_since_last_command:.3f}s, stopping robot")
+            self.status = 'stop'
+            self.x_move_amplitude = 0.0
+            self.y_move_amplitude = 0.0
+            self.angle_move_amplitude = 0.0
+            try:
+                self.gait_manager.stop()
+            except Exception as e:
+                rospy.logerr(f"Watchdog: Error stopping gait_manager: {e}")
     
     def health_check_service(self, req):
         """Обработчик сервиса проверки здоровья робота."""
@@ -385,12 +413,21 @@ class JoystickController:
     
     def joy_callback(self, joy_msg):
         """Главный обработчик сообщений джойстика."""
+        # Обновляем время последней команды при каждом сообщении от джойстика
+        self.last_command_time = rospy.get_time()
+        
         axes = dict(zip(self.axes_map, joy_msg.axes))
         buttons = dict(zip(self.button_map, joy_msg.buttons))
         
         axes_changed = any(self.last_axes.get(key, 0.0) != value for key, value in axes.items())
         
-        if axes_changed:
+        # Проверяем, все ли оси в нулевом положении (с учетом порога)
+        all_axes_zero = all(abs(axes.get(k, 0.0)) < 0.1 for k in ['lx', 'ly', 'rx'])
+        
+        # Вызываем axes_callback если:
+        # 1. Оси изменились ИЛИ
+        # 2. Все оси нулевые, но робот еще движется (нужно остановить)
+        if axes_changed or (all_axes_zero and self.status == 'move'):
             try:
                 self.axes_callback(axes)
                 self.height_callback(axes)
@@ -425,11 +462,28 @@ class JoystickController:
         """Обработчик завершения работы - гарантирует остановку робота."""
         try:
             rospy.loginfo("Shutting down joystick controller...")
-            self.gait_manager.stop()
+            # Принудительно обнуляем амплитуды
+            self.x_move_amplitude = 0.0
+            self.y_move_amplitude = 0.0
+            self.angle_move_amplitude = 0.0
+            self.status = 'stop'
+            # Останавливаем робота несколько раз для надежности
+            try:
+                self.gait_manager.stop()
+            except Exception as e:
+                rospy.logerr(f"Error stopping gait_manager in shutdown: {e}")
+            # Даем время на остановку
+            rospy.sleep(0.1)
+            try:
+                self.gait_manager.stop()
+            except Exception:
+                pass
             self.serial_handler.stop()
             rospy.loginfo("Robot stopped on shutdown")
         except Exception as e:
             rospy.logerr(f"Error during shutdown: {e}")
+            import traceback
+            rospy.logerr(traceback.format_exc())
 
 
 if __name__ == "__main__":

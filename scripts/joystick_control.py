@@ -35,7 +35,20 @@ if __name__ == "__main__":
     finally:
         if node is not None:
             try:
-                node.gait_manager.stop()
+                rospy.loginfo("Stopping robot in finally block...")
+                # Принудительно обнуляем амплитуды
+                node.x_move_amplitude = 0.0
+                node.y_move_amplitude = 0.0
+                node.angle_move_amplitude = 0.0
+                node.status = 'stop'
+                # Останавливаем робота несколько раз для надежности
+                try:
+                    node.gait_manager.stop()
+                    rospy.sleep(0.1)  # Даем время на остановку
+                    node.gait_manager.stop()  # Повторная попытка
+                except Exception as e:
+                    rospy.logerr(f"Error stopping gait_manager: {e}")
                 node.serial_handler.stop()
-            except Exception:
-                pass
+                rospy.loginfo("Robot stopped in finally block")
+            except Exception as e:
+                rospy.logerr(f"Error in finally block: {e}")

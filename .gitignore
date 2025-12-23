@@ -1,3 +1,9 @@
 scripts/__pycache__
 INSTR/
-scripts/__pycache__/auto_stabilization.cpython-38.pyc
+config/__pycache__/
+control/__pycache__/
+walking/__pycache__/
+game/__pycache__/
+imu/__pycache__/
+config/__pycache__/__init__.cpython-38.pyc
+config/__pycache__/config_loader.cpython-38.pyc

@@ -1,0 +1,862 @@
+... logging to /root/.ros/log/661d81b6-dfa4-11f0-b480-2ccf676ee7bc/roslaunch-raspberrypi-1568.log
+Checking log directory for disk usage. This may take a while.
+Press Ctrl-C to interrupt
+Done checking log file disk usage. Usage is <1GB.
+]2;/home/ubuntu/ros_ws/src/ainex_bringup/launch/bringup.launch
+[1mstarted roslaunch server http://raspberrypi:43279/[0m
+
+SUMMARY
+========
+
+PARAMETERS
+ * /ainex_controller/controllers/ainex_controller/joint_controllers: ['l_ank_roll_cont...
+ * /ainex_controller/controllers/ainex_controller/joint_trajectory_action_node/constraints/goal_time: 0.05
+ * /ainex_controller/controllers/ainex_controller/joint_trajectory_action_node/min_velocity: 0.1
+ * /ainex_controller/controllers/ainex_controller/type: JointTrajectoryAc...
+ * /ainex_controller/controllers/head_pan_controller/joint_name: head_pan
+ * /ainex_controller/controllers/head_pan_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/head_pan_controller/port_id: 1
+ * /ainex_controller/controllers/head_pan_controller/servo/id: 23
+ * /ainex_controller/controllers/head_pan_controller/servo/init: 500
+ * /ainex_controller/controllers/head_pan_controller/servo/max: 1000
+ * /ainex_controller/controllers/head_pan_controller/servo/min: 0
+ * /ainex_controller/controllers/head_pan_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/head_tilt_controller/joint_name: head_tilt
+ * /ainex_controller/controllers/head_tilt_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/head_tilt_controller/port_id: 1
+ * /ainex_controller/controllers/head_tilt_controller/servo/id: 24
+ * /ainex_controller/controllers/head_tilt_controller/servo/init: 500
+ * /ainex_controller/controllers/head_tilt_controller/servo/max: 1000
+ * /ainex_controller/controllers/head_tilt_controller/servo/min: 0
+ * /ainex_controller/controllers/head_tilt_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_ank_pitch_controller/joint_name: l_ank_pitch
+ * /ainex_controller/controllers/l_ank_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_ank_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/l_ank_pitch_controller/servo/id: 3
+ * /ainex_controller/controllers/l_ank_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/l_ank_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_ank_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/l_ank_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_ank_roll_controller/joint_name: l_ank_roll
+ * /ainex_controller/controllers/l_ank_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_ank_roll_controller/port_id: 1
+ * /ainex_controller/controllers/l_ank_roll_controller/servo/id: 1
+ * /ainex_controller/controllers/l_ank_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/l_ank_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_ank_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/l_ank_roll_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_el_pitch_controller/joint_name: l_el_pitch
+ * /ainex_controller/controllers/l_el_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_el_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/l_el_pitch_controller/servo/id: 17
+ * /ainex_controller/controllers/l_el_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/l_el_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_el_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/l_el_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_el_yaw_controller/joint_name: l_el_yaw
+ * /ainex_controller/controllers/l_el_yaw_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_el_yaw_controller/port_id: 1
+ * /ainex_controller/controllers/l_el_yaw_controller/servo/id: 19
+ * /ainex_controller/controllers/l_el_yaw_controller/servo/init: 500
+ * /ainex_controller/controllers/l_el_yaw_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_el_yaw_controller/servo/min: 0
+ * /ainex_controller/controllers/l_el_yaw_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_gripper_controller/joint_name: l_gripper
+ * /ainex_controller/controllers/l_gripper_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_gripper_controller/port_id: 1
+ * /ainex_controller/controllers/l_gripper_controller/servo/id: 21
+ * /ainex_controller/controllers/l_gripper_controller/servo/init: 500
+ * /ainex_controller/controllers/l_gripper_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_gripper_controller/servo/min: 0
+ * /ainex_controller/controllers/l_gripper_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_hip_pitch_controller/joint_name: l_hip_pitch
+ * /ainex_controller/controllers/l_hip_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_hip_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/l_hip_pitch_controller/servo/id: 7
+ * /ainex_controller/controllers/l_hip_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/l_hip_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_hip_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/l_hip_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_hip_roll_controller/joint_name: l_hip_roll
+ * /ainex_controller/controllers/l_hip_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_hip_roll_controller/port_id: 1
+ * /ainex_controller/controllers/l_hip_roll_controller/servo/id: 9
+ * /ainex_controller/controllers/l_hip_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/l_hip_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_hip_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/l_hip_roll_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_hip_yaw_controller/joint_name: l_hip_yaw
+ * /ainex_controller/controllers/l_hip_yaw_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_hip_yaw_controller/port_id: 1
+ * /ainex_controller/controllers/l_hip_yaw_controller/servo/id: 11
+ * /ainex_controller/controllers/l_hip_yaw_controller/servo/init: 500
+ * /ainex_controller/controllers/l_hip_yaw_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_hip_yaw_controller/servo/min: 0
+ * /ainex_controller/controllers/l_hip_yaw_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_knee_controller/joint_name: l_knee
+ * /ainex_controller/controllers/l_knee_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_knee_controller/port_id: 1
+ * /ainex_controller/controllers/l_knee_controller/servo/id: 5
+ * /ainex_controller/controllers/l_knee_controller/servo/init: 240
+ * /ainex_controller/controllers/l_knee_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_knee_controller/servo/min: 0
+ * /ainex_controller/controllers/l_knee_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_sho_pitch_controller/joint_name: l_sho_pitch
+ * /ainex_controller/controllers/l_sho_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_sho_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/l_sho_pitch_controller/servo/id: 13
+ * /ainex_controller/controllers/l_sho_pitch_controller/servo/init: 875
+ * /ainex_controller/controllers/l_sho_pitch_controller/servo/max: 0
+ * /ainex_controller/controllers/l_sho_pitch_controller/servo/min: 1000
+ * /ainex_controller/controllers/l_sho_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_sho_roll_controller/joint_name: l_sho_roll
+ * /ainex_controller/controllers/l_sho_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_sho_roll_controller/port_id: 1
+ * /ainex_controller/controllers/l_sho_roll_controller/servo/id: 15
+ * /ainex_controller/controllers/l_sho_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/l_sho_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_sho_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/l_sho_roll_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_ank_pitch_controller/joint_name: r_ank_pitch
+ * /ainex_controller/controllers/r_ank_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_ank_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/r_ank_pitch_controller/servo/id: 4
+ * /ainex_controller/controllers/r_ank_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/r_ank_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_ank_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/r_ank_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_ank_roll_controller/joint_name: r_ank_roll
+ * /ainex_controller/controllers/r_ank_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_ank_roll_controller/port_id: 1
+ * /ainex_controller/controllers/r_ank_roll_controller/servo/id: 2
+ * /ainex_controller/controllers/r_ank_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/r_ank_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_ank_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/r_ank_roll_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_el_pitch_controller/joint_name: r_el_pitch
+ * /ainex_controller/controllers/r_el_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_el_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/r_el_pitch_controller/servo/id: 18
+ * /ainex_controller/controllers/r_el_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/r_el_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_el_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/r_el_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_el_yaw_controller/joint_name: r_el_yaw
+ * /ainex_controller/controllers/r_el_yaw_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_el_yaw_controller/port_id: 1
+ * /ainex_controller/controllers/r_el_yaw_controller/servo/id: 20
+ * /ainex_controller/controllers/r_el_yaw_controller/servo/init: 500
+ * /ainex_controller/controllers/r_el_yaw_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_el_yaw_controller/servo/min: 0
+ * /ainex_controller/controllers/r_el_yaw_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_gripper_controller/joint_name: r_gripper
+ * /ainex_controller/controllers/r_gripper_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_gripper_controller/port_id: 1
+ * /ainex_controller/controllers/r_gripper_controller/servo/id: 22
+ * /ainex_controller/controllers/r_gripper_controller/servo/init: 500
+ * /ainex_controller/controllers/r_gripper_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_gripper_controller/servo/min: 0
+ * /ainex_controller/controllers/r_gripper_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_hip_pitch_controller/joint_name: r_hip_pitch
+ * /ainex_controller/controllers/r_hip_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_hip_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/r_hip_pitch_controller/servo/id: 8
+ * /ainex_controller/controllers/r_hip_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/r_hip_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_hip_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/r_hip_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_hip_roll_controller/joint_name: r_hip_roll
+ * /ainex_controller/controllers/r_hip_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_hip_roll_controller/port_id: 1
+ * /ainex_controller/controllers/r_hip_roll_controller/servo/id: 10
+ * /ainex_controller/controllers/r_hip_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/r_hip_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_hip_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/r_hip_roll_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_hip_yaw_controller/joint_name: r_hip_yaw
+ * /ainex_controller/controllers/r_hip_yaw_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_hip_yaw_controller/port_id: 1
+ * /ainex_controller/controllers/r_hip_yaw_controller/servo/id: 12
+ * /ainex_controller/controllers/r_hip_yaw_controller/servo/init: 500
+ * /ainex_controller/controllers/r_hip_yaw_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_hip_yaw_controller/servo/min: 0
+ * /ainex_controller/controllers/r_hip_yaw_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_knee_controller/joint_name: r_knee
+ * /ainex_controller/controllers/r_knee_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_knee_controller/port_id: 1
+ * /ainex_controller/controllers/r_knee_controller/servo/id: 6
+ * /ainex_controller/controllers/r_knee_controller/servo/init: 760
+ * /ainex_controller/controllers/r_knee_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_knee_controller/servo/min: 0
+ * /ainex_controller/controllers/r_knee_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_sho_pitch_controller/joint_name: r_sho_pitch
+ * /ainex_controller/controllers/r_sho_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_sho_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/r_sho_pitch_controller/servo/id: 14
+ * /ainex_controller/controllers/r_sho_pitch_controller/servo/init: 125
+ * /ainex_controller/controllers/r_sho_pitch_controller/servo/max: 0
+ * /ainex_controller/controllers/r_sho_pitch_controller/servo/min: 1000
+ * /ainex_controller/controllers/r_sho_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_sho_roll_controller/joint_name: r_sho_roll
+ * /ainex_controller/controllers/r_sho_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_sho_roll_controller/port_id: 1
+ * /ainex_controller/controllers/r_sho_roll_controller/servo/id: 16
+ * /ainex_controller/controllers/r_sho_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/r_sho_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_sho_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/r_sho_roll_controller/type: JointPositionCont...
+ * /ainex_controller/gazebo_sim: False
+ * /ainex_controller/init_pose/head_pan: 0.0
+ * /ainex_controller/init_pose/head_tilt: 0.0
+ * /ainex_controller/init_pose/l_ank_pitch: 0.625
+ * /ainex_controller/init_pose/l_ank_roll: 0.016
+ * /ainex_controller/init_pose/l_el_pitch: -0.1
+ * /ainex_controller/init_pose/l_el_yaw: -1.926
+ * /ainex_controller/init_pose/l_gripper: 0.0
+ * /ainex_controller/init_pose/l_hip_pitch: -0.828
+ * /ainex_controller/init_pose/l_hip_roll: 0.016
+ * /ainex_controller/init_pose/l_hip_yaw: 0.0
+ * /ainex_controller/init_pose/l_knee: 1.192
+ * /ainex_controller/init_pose/l_sho_pitch: 0.0
+ * /ainex_controller/init_pose/l_sho_roll: 1.293
+ * /ainex_controller/init_pose/r_ank_pitch: -0.625
+ * /ainex_controller/init_pose/r_ank_roll: -0.016
+ * /ainex_controller/init_pose/r_el_pitch: 0.1
+ * /ainex_controller/init_pose/r_el_yaw: 1.926
+ * /ainex_controller/init_pose/r_gripper: 0.0
+ * /ainex_controller/init_pose/r_hip_pitch: 0.828
+ * /ainex_controller/init_pose/r_hip_roll: -0.016
+ * /ainex_controller/init_pose/r_hip_yaw: 0.0
+ * /ainex_controller/init_pose/r_knee: -1.192
+ * /ainex_controller/init_pose/r_sho_pitch: 0.0
+ * /ainex_controller/init_pose/r_sho_roll: -1.293
+ * /ainex_controller/serial_ports: [{'port_name': '/...
+ * /app/color_track/color_track/pid1_d: 0.003
+ * /app/color_track/color_track/pid1_i: 0.0
+ * /app/color_track/color_track/pid1_p: 0.13
+ * /app/color_track/color_track/pid2_d: 0.003
+ * /app/color_track/color_track/pid2_i: 0.0
+ * /app/color_track/color_track/pid2_p: 0.13
+ * /camera/camera_frame_id: camera
+ * /camera/camera_info_url: file:///home/ubun...
+ * /camera/camera_name: camera
+ * /camera/frame_rate: 10.0
+ * /camera/image_height: 480
+ * /camera/image_raw/compressed/jpeg_quality: 30
+ * /camera/image_topic: image_raw
+ * /camera/image_width: 640
+ * /camera/io_method: mmap
+ * /camera/pixel_format: yuyv
+ * /camera/rectify_color/queue_size: 10
+ * /camera/video_device: /dev/usb_cam
+ * /color_detection/debug: False
+ * /color_detection/enable_display: False
+ * /color_detection/enable_roi: True
+ * /color_track/pid1_d: 0.003
+ * /color_track/pid1_i: 0.0
+ * /color_track/pid1_p: 0.13
+ * /color_track/pid2_d: 0.003
+ * /color_track/pid2_i: 0.0
+ * /color_track/pid2_p: 0.13
+ * /face_detect/confidence: 0.5
+ * /face_detect/enable_display: False
+ * /imu_calib/calib_file: /home/ubuntu/ros_...
+ * /imu_filter/bias_alpha: 0.15
+ * /imu_filter/do_adaptive_gain: True
+ * /imu_filter/do_bias_estimation: True
+ * /imu_filter/gain_acc: 0.15
+ * /imu_filter/use_mag: True
+ * /joystick/autorepeat_rate: 20.0
+ * /joystick/coalesce_interval: 0.05
+ * /joystick/dev: /dev/input/js0
+ * /ros_robot_controller/calibration: [9.103e-07, 7.42e...
+ * /ros_robot_controller/freq: 100
+ * /ros_robot_controller/imu_frame: imu_link
+ * /rosapi/params_glob: [*]
+ * /rosapi/services_glob: [*]
+ * /rosapi/topics_glob: [*]
+ * /rosbridge_websocket/address: 0.0.0.0
+ * /rosbridge_websocket/authenticate: False
+ * /rosbridge_websocket/bson_only_mode: False
+ * /rosbridge_websocket/delay_between_messages: 0
+ * /rosbridge_websocket/fragment_timeout: 600
+ * /rosbridge_websocket/max_message_size: None
+ * /rosbridge_websocket/params_glob: [*]
+ * /rosbridge_websocket/port: 9090
+ * /rosbridge_websocket/retry_startup_delay: 5
+ * /rosbridge_websocket/services_glob: [*]
+ * /rosbridge_websocket/topics_glob: [*]
+ * /rosbridge_websocket/unregister_timeout: 3600000
+ * /rosbridge_websocket/use_compression: False
+ * /rosbridge_websocket/websocket_external_port: None
+ * /rosbridge_websocket/websocket_ping_interval: 0
+ * /rosbridge_websocket/websocket_ping_timeout: 30
+ * /rosdistro: noetic
+ * /rosversion: 1.16.0
+ * /teleop_fetch/head_sensitivity: 1.0
+ * /teleop_fetch/max_head_pan: 2.0
+ * /teleop_fetch/max_head_tilt: 2.0
+ * /teleop_fetch/movement_duration: 0.2
+
+NODES
+  /
+    ainex_controller (ainex_kinematics/ainex_controller.py)
+    app (ainex_app/app_node.py)
+    camera (usb_cam/usb_cam_node)
+    color_detection (ainex_example/color_detection_node.py)
+    face_detect (ainex_example/face_detect_node.py)
+    imu_calib (imu_calib/apply_calib)
+    imu_filter (imu_complementary_filter/complementary_filter_node)
+    joystick (joy/joy_node)
+    joystick_control (ainex_peripherals/joystick_control.py)
+    ros_robot_controller (ros_robot_controller/ros_robot_controller_node.py)
+    rosapi (rosapi/rosapi_node)
+    rosbridge_websocket (rosbridge_server/rosbridge_websocket)
+    teleop_fetch (teleop_fetch/fetcher.py)
+    topici_list (proverka_nod/topici_list.py)
+    web_video_server (web_video_server/web_video_server)
+  /camera/
+    manager (nodelet/nodelet)
+    rectify_color (nodelet/nodelet)
+Exception in thread Thread-5:
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/serial/serialposix.py", line 500, in read
+    raise SerialException(
+serial.serialutil.SerialException: device reports readiness to read but returned no data (device disconnected or multiple access on port?)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3.8/threading.py", line 932, in _bootstrap_inner
+    self.run()
+  File "/usr/lib/python3.8/threading.py", line 870, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/ubuntu/ros_ws/src/ainex_driver/ros_robot_controller/src/ros_robot_controller/ros_robot_controller_sdk.py", line 501, in recv_task
+    recv_data = self.port.read()
+  File "/usr/lib/python3/dist-packages/serial/serialposix.py", line 509, in read
+    raise SerialException('read failed: {}'.format(e))
+serial.serialutil.SerialException: read failed: device reports readiness to read but returned no data (device disconnected or multiple access on port?)
+Traceback (most recent call last):
+  File "/home/ubuntu/ros_ws/src/ainex_app/scripts/app_node.py", line 9, in <module>
+    from transitions import Machine
+ModuleNotFoundError: No module named 'transitions'
+[33m[ WARN] [1766455767.090782418]: unknown control 'white_balance_temperature_auto'
+[0m
+[33m[ WARN] [1766455767.100107693]: unknown control 'focus_auto'
+[0m
+2025-12-23 02:09:27+0000 [-] Log opened.
+Traceback (most recent call last):
+  File "/home/ubuntu/ros_ws/src/ainex_example/scripts/face_detect/face_detect_node.py", line 12, in <module>
+    import mediapipe as mp
+ModuleNotFoundError: No module named 'mediapipe'
+2025-12-23 02:09:27+0000 [-] registered capabilities (classes):
+2025-12-23 02:09:27+0000 [-]  - <class 'rosbridge_library.capabilities.call_service.CallService'>
+2025-12-23 02:09:27+0000 [-]  - <class 'rosbridge_library.capabilities.advertise.Advertise'>
+2025-12-23 02:09:27+0000 [-]  - <class 'rosbridge_library.capabilities.publish.Publish'>
+2025-12-23 02:09:27+0000 [-]  - <class 'rosbridge_library.capabilities.subscribe.Subscribe'>
+2025-12-23 02:09:27+0000 [-]  - <class 'rosbridge_library.capabilities.defragmentation.Defragment'>
+2025-12-23 02:09:27+0000 [-]  - <class 'rosbridge_library.capabilities.advertise_service.AdvertiseService'>
+2025-12-23 02:09:27+0000 [-]  - <class 'rosbridge_library.capabilities.service_response.ServiceResponse'>
+2025-12-23 02:09:27+0000 [-]  - <class 'rosbridge_library.capabilities.unadvertise_service.UnadvertiseService'>
+2025-12-23 02:09:27+0000 [-] WebSocketServerFactory starting on 9090
+2025-12-23 02:09:27+0000 [-] Starting factory <autobahn.twisted.websocket.WebSocketServerFactory object at 0x7ffed69c5a90>
+2025-12-23 02:09:27+0000 [-] [INFO] [1766455767.535343]: Rosbridge WebSocket server started at ws://0.0.0.0:9090
+[INFO] [1766455768.802769]: Serial port reading thread started
+[INFO] [1766455768.803011]: SerialHandler initialized
+[INFO] [1766455768.812291]: GameServices initialized for robot: robot_1
+[INFO] [1766455768.822745]: PID stabilization enabled: Kp=0.008, Ki=0.04, Kd=0.0003, setpoint=90.0°, limits=(-2.05, 2.05)
+[INFO] [1766455768.824367]: StabilizationModule initialized: enabled=True
+[INFO] [1766455768.825703]: SpeedControl module initialized with 4 speed modes: [1, 2, 3, 4]
+[INFO] [1766455768.826818]: SpeedControl initialized with stabilization: enabled=True
+[INFO] [1766455768.834408]: ButtonHandler module initialized
+[INFO] [1766455768.840174]: Joystick Controller Initialized
+shutdown request: user request
+[INFO] [1766455804.816360]: Shutting down joystick controller...
+[INFO] [1766455804.820463]: Robot stopped on shutdown
+[INFO] [1766455804.924882]: Serial port reading thread stopped
+[33m[ WARN] [1766455806.037188464]: Shutdown request received.[0m
+[33m[ WARN] [1766455806.037590440]: Reason given for shutdown: [[/joystick] Reason: new node registered with same name][0m
+[0m[ INFO] [1766455764.433109250]: Opened joystick: /dev/input/js0 (SHANWAN Android Gamepad). deadzone_: 0.050000.[0m
+[INFO] [1766455768.445504]: ainex controller init finish
+shutdown request: user request
+[33m[ WARN] [1766455898.661721184]: Shutdown request received.[0m
+[33m[ WARN] [1766455898.661988078]: Reason given for shutdown: [user request][0m
+[33m[ WARN] [1766455898.687998461]: Shutdown request received.[0m
+[33m[ WARN] [1766455898.688132352]: Reason given for shutdown: [user request][0m
+[33m[ WARN] [1766455898.714535020]: Shutdown request received. Reason: [user request][0m
+[33m[ WARN] [1766455898.857652526]: Shutdown request received.[0m
+[33m[ WARN] [1766455898.863759378]: Reason given for shutdown: [user request][0m
+[33m[ WARN] [1766455898.898951299]: Shutdown request received.[0m
+[33m[ WARN] [1766455898.903168136]: Reason given for shutdown: [user request][0m
+shutdown request: user request
+[INFO] [1766455898.929024]: ------motor stop-------
+terminate called after throwing an instance of 'boost::wrapexcept<boost::lock_error>'
+  what():  boost: mutex lock failed in pthread_mutex_lock: Invalid argument
+2025-12-23 02:11:39+0000 [-] shutdown request: user request
+2025-12-23 02:11:39+0000 [autobahn.twisted.websocket.WebSocketServerFactory] (TCP Port 9090 Closed)
+2025-12-23 02:11:39+0000 [-] Stopping factory <autobahn.twisted.websocket.WebSocketServerFactory object at 0x7ffed69c5a90>
+2025-12-23 02:11:39+0000 [-] Main loop terminated.
+[33m[ WARN] [1766455899.413343799]: Shutdown request received.[0m
+[33m[ WARN] [1766455899.413424597]: Reason given for shutdown: [user request][0m
+[INFO] [1766455765.969569]: Rosapi started
+shutdown request: user request
+[0m[ INFO] [1766455766.727470530]: Waiting For connections on 0.0.0.0:8080[0m
+[INFO] [1766455766.052901]: ActionGroups Publisher запущен и публикует данные в /action_groups_data
+[INFO] [1766455766.187813]: TeleopFetcher нода инициализирована
+[INFO] [1766455766.189357]: Чувствительность головы: 1.0
+[INFO] [1766455766.190935]: Максимальный поворот головы: ±2.0
+[INFO] [1766455766.193628]: Максимальный наклон головы: ±2.0
+[INFO] [1766455766.195532]: Подписка на топики:
+[INFO] [1766455766.197124]:   - /quest/poses: данные о положении головы и рук оператора
+[INFO] [1766455766.198481]:   - /quest/joints: данные о кнопках и джойстиках VR контроллеров
+[INFO] [1766455766.199716]: Готов к получению данных от VR гарнитуры Quest
+[INFO] [1766455766.201230]: Начальное состояние управления руками: idle
+[INFO] [1766455766.202477]: Управление головой: отключено
+[INFO] [1766455766.203562]: Для калибровки нажмите X на левом контроллере
+[INFO] [1766455766.204882]: Установка рук робота в стартовую позицию...
+[INFO] [1766455766.205955]: Сервопривод ID14: позиция 126
+[INFO] [1766455766.206882]: Сервопривод ID16: позиция 167
+[INFO] [1766455766.207854]: Сервопривод ID18: позиция 498
+[INFO] [1766455766.208760]: Сервопривод ID20: позиция 956
+[INFO] [1766455766.209930]: Сервопривод ID22: позиция 500
+[INFO] [1766455766.211099]: Сервопривод ID13: позиция 874
+[INFO] [1766455766.212042]: Сервопривод ID15: позиция 833
+[INFO] [1766455766.213356]: Сервопривод ID17: позиция 502
+[INFO] [1766455766.215157]: Сервопривод ID19: позиция 44
+[INFO] [1766455766.217407]: Сервопривод ID21: позиция 500
+[INFO] [1766455766.221570]: Команда установки стартовой позы рук отправлена
+[INFO] [1766455766.229401]: Установлено 10 сервоприводов
+[INFO] [1766455766.833001]: Стартовая поза рук установлена
+[INFO] [1766455766.838793]: TeleopFetcher нода запущена
+[31m[app-16] process has died [pid 1692, exit code 1, cmd /home/ubuntu/ros_ws/src/ainex_app/scripts/app_node.py __name:=app __log:=/root/.ros/log/661d81b6-dfa4-11f0-b480-2ccf676ee7bc/app-16.log].
+log file: /root/.ros/log/661d81b6-dfa4-11f0-b480-2ccf676ee7bc/app-16*.log[0m
+[31m[face_detect-15] process has died [pid 1689, exit code 1, cmd /home/ubuntu/ros_ws/src/ainex_example/scripts/face_detect/face_detect_node.py __name:=face_detect __log:=/root/.ros/log/661d81b6-dfa4-11f0-b480-2ccf676ee7bc/face_detect-15.log].
+log file: /root/.ros/log/661d81b6-dfa4-11f0-b480-2ccf676ee7bc/face_detect-15*.log[0m
+[31m================================================================================REQUIRED process [ros_robot_controller-5] has died!
+process has finished cleanly
+log file: /root/.ros/log/661d81b6-dfa4-11f0-b480-2ccf676ee7bc/ros_robot_controller-5*.log
+Initiating shutdown!
+================================================================================[0m
+[31m[color_detection-14] escalating to SIGTERM[0m
+[31m[color_detection-14] escalating to SIGKILL[0m
+[31mShutdown errors:
+ * process[color_detection-14, pid 1688]: required SIGKILL. May still be running.[0m
+
+auto-starting new master
+[1mprocess[master]: started with pid [1622][0m
+[1mROS_MASTER_URI=http://localhost:11311[0m
+]2;/home/ubuntu/ros_ws/src/ainex_bringup/launch/bringup.launch http://localhost:11311
+[1msetting /run_id to 661d81b6-dfa4-11f0-b480-2ccf676ee7bc[0m
+[1mprocess[rosout-1]: started with pid [1650][0m
+started core service [/rosout]
+[1mprocess[camera-2]: started with pid [1653][0m
+[1mprocess[camera/manager-3]: started with pid [1654][0m
+[1mprocess[camera/rectify_color-4]: started with pid [1655][0m
+[1mprocess[ros_robot_controller-5]: started with pid [1656][0m
+[1mprocess[ainex_controller-6]: started with pid [1657][0m
+[1mprocess[imu_calib-7]: started with pid [1658][0m
+[1mprocess[imu_filter-8]: started with pid [1659][0m
+[1mprocess[joystick-9]: started with pid [1660][0m
+[1mprocess[joystick_control-10]: started with pid [1661][0m
+[1mprocess[web_video_server-11]: started with pid [1671][0m
+[1mprocess[rosbridge_websocket-12]: started with pid [1680][0m
+[1mprocess[rosapi-13]: started with pid [1682][0m
+[1mprocess[color_detection-14]: started with pid [1688][0m
+[1mprocess[face_detect-15]: started with pid [1689][0m
+[1mprocess[app-16]: started with pid [1692][0m
+[1mprocess[teleop_fetch-17]: started with pid [1697][0m
+[1mprocess[topici_list-18]: started with pid [1708][0m
+[1m[joystick_control-10] process has finished cleanly
+log file: /root/.ros/log/661d81b6-dfa4-11f0-b480-2ccf676ee7bc/joystick_control-10*.log[0m
+[1m[joystick-9] process has finished cleanly
+log file: /root/.ros/log/661d81b6-dfa4-11f0-b480-2ccf676ee7bc/joystick-9*.log[0m
+[1m[ainex_controller-6] process has finished cleanly
+log file: /root/.ros/log/661d81b6-dfa4-11f0-b480-2ccf676ee7bc/ainex_controller-6*.log[0m
+[1m[camera/rectify_color-4] process has finished cleanly
+log file: /root/.ros/log/661d81b6-dfa4-11f0-b480-2ccf676ee7bc/camera-rectify_color-4*.log[0m
+[1m[camera/manager-3] process has finished cleanly
+log file: /root/.ros/log/661d81b6-dfa4-11f0-b480-2ccf676ee7bc/camera-manager-3*.log[0m
+[topici_list-18] killing on exit
+[color_detection-14] killing on exit
+[teleop_fetch-17] killing on exit
+[web_video_server-11] killing on exit
+[imu_calib-7] killing on exit
+[ros_robot_controller-5] killing on exit
+[rosapi-13] killing on exit
+[camera-2] killing on exit
+[rosbridge_websocket-12] killing on exit
+[imu_filter-8] killing on exit
+[rosout-1] killing on exit
+[master] killing on exit
+shutting down processing monitor...
+... shutting down processing monitor complete
+[1mdone[0m
+... logging to /root/.ros/log/c57019d0-dfa4-11f0-beab-2ccf676ee7bc/roslaunch-raspberrypi-4270.log
+Checking log directory for disk usage. This may take a while.
+Press Ctrl-C to interrupt
+Done checking log file disk usage. Usage is <1GB.
+]2;/home/ubuntu/ros_ws/src/ainex_bringup/launch/bringup.launch
+[1mstarted roslaunch server http://raspberrypi:44087/[0m
+
+SUMMARY
+========
+
+PARAMETERS
+ * /ainex_controller/controllers/ainex_controller/joint_controllers: ['l_ank_roll_cont...
+ * /ainex_controller/controllers/ainex_controller/joint_trajectory_action_node/constraints/goal_time: 0.05
+ * /ainex_controller/controllers/ainex_controller/joint_trajectory_action_node/min_velocity: 0.1
+ * /ainex_controller/controllers/ainex_controller/type: JointTrajectoryAc...
+ * /ainex_controller/controllers/head_pan_controller/joint_name: head_pan
+ * /ainex_controller/controllers/head_pan_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/head_pan_controller/port_id: 1
+ * /ainex_controller/controllers/head_pan_controller/servo/id: 23
+ * /ainex_controller/controllers/head_pan_controller/servo/init: 500
+ * /ainex_controller/controllers/head_pan_controller/servo/max: 1000
+ * /ainex_controller/controllers/head_pan_controller/servo/min: 0
+ * /ainex_controller/controllers/head_pan_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/head_tilt_controller/joint_name: head_tilt
+ * /ainex_controller/controllers/head_tilt_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/head_tilt_controller/port_id: 1
+ * /ainex_controller/controllers/head_tilt_controller/servo/id: 24
+ * /ainex_controller/controllers/head_tilt_controller/servo/init: 500
+ * /ainex_controller/controllers/head_tilt_controller/servo/max: 1000
+ * /ainex_controller/controllers/head_tilt_controller/servo/min: 0
+ * /ainex_controller/controllers/head_tilt_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_ank_pitch_controller/joint_name: l_ank_pitch
+ * /ainex_controller/controllers/l_ank_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_ank_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/l_ank_pitch_controller/servo/id: 3
+ * /ainex_controller/controllers/l_ank_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/l_ank_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_ank_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/l_ank_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_ank_roll_controller/joint_name: l_ank_roll
+ * /ainex_controller/controllers/l_ank_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_ank_roll_controller/port_id: 1
+ * /ainex_controller/controllers/l_ank_roll_controller/servo/id: 1
+ * /ainex_controller/controllers/l_ank_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/l_ank_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_ank_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/l_ank_roll_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_el_pitch_controller/joint_name: l_el_pitch
+ * /ainex_controller/controllers/l_el_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_el_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/l_el_pitch_controller/servo/id: 17
+ * /ainex_controller/controllers/l_el_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/l_el_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_el_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/l_el_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_el_yaw_controller/joint_name: l_el_yaw
+ * /ainex_controller/controllers/l_el_yaw_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_el_yaw_controller/port_id: 1
+ * /ainex_controller/controllers/l_el_yaw_controller/servo/id: 19
+ * /ainex_controller/controllers/l_el_yaw_controller/servo/init: 500
+ * /ainex_controller/controllers/l_el_yaw_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_el_yaw_controller/servo/min: 0
+ * /ainex_controller/controllers/l_el_yaw_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_gripper_controller/joint_name: l_gripper
+ * /ainex_controller/controllers/l_gripper_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_gripper_controller/port_id: 1
+ * /ainex_controller/controllers/l_gripper_controller/servo/id: 21
+ * /ainex_controller/controllers/l_gripper_controller/servo/init: 500
+ * /ainex_controller/controllers/l_gripper_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_gripper_controller/servo/min: 0
+ * /ainex_controller/controllers/l_gripper_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_hip_pitch_controller/joint_name: l_hip_pitch
+ * /ainex_controller/controllers/l_hip_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_hip_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/l_hip_pitch_controller/servo/id: 7
+ * /ainex_controller/controllers/l_hip_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/l_hip_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_hip_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/l_hip_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_hip_roll_controller/joint_name: l_hip_roll
+ * /ainex_controller/controllers/l_hip_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_hip_roll_controller/port_id: 1
+ * /ainex_controller/controllers/l_hip_roll_controller/servo/id: 9
+ * /ainex_controller/controllers/l_hip_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/l_hip_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_hip_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/l_hip_roll_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_hip_yaw_controller/joint_name: l_hip_yaw
+ * /ainex_controller/controllers/l_hip_yaw_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_hip_yaw_controller/port_id: 1
+ * /ainex_controller/controllers/l_hip_yaw_controller/servo/id: 11
+ * /ainex_controller/controllers/l_hip_yaw_controller/servo/init: 500
+ * /ainex_controller/controllers/l_hip_yaw_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_hip_yaw_controller/servo/min: 0
+ * /ainex_controller/controllers/l_hip_yaw_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_knee_controller/joint_name: l_knee
+ * /ainex_controller/controllers/l_knee_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_knee_controller/port_id: 1
+ * /ainex_controller/controllers/l_knee_controller/servo/id: 5
+ * /ainex_controller/controllers/l_knee_controller/servo/init: 240
+ * /ainex_controller/controllers/l_knee_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_knee_controller/servo/min: 0
+ * /ainex_controller/controllers/l_knee_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_sho_pitch_controller/joint_name: l_sho_pitch
+ * /ainex_controller/controllers/l_sho_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_sho_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/l_sho_pitch_controller/servo/id: 13
+ * /ainex_controller/controllers/l_sho_pitch_controller/servo/init: 875
+ * /ainex_controller/controllers/l_sho_pitch_controller/servo/max: 0
+ * /ainex_controller/controllers/l_sho_pitch_controller/servo/min: 1000
+ * /ainex_controller/controllers/l_sho_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/l_sho_roll_controller/joint_name: l_sho_roll
+ * /ainex_controller/controllers/l_sho_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/l_sho_roll_controller/port_id: 1
+ * /ainex_controller/controllers/l_sho_roll_controller/servo/id: 15
+ * /ainex_controller/controllers/l_sho_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/l_sho_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/l_sho_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/l_sho_roll_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_ank_pitch_controller/joint_name: r_ank_pitch
+ * /ainex_controller/controllers/r_ank_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_ank_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/r_ank_pitch_controller/servo/id: 4
+ * /ainex_controller/controllers/r_ank_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/r_ank_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_ank_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/r_ank_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_ank_roll_controller/joint_name: r_ank_roll
+ * /ainex_controller/controllers/r_ank_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_ank_roll_controller/port_id: 1
+ * /ainex_controller/controllers/r_ank_roll_controller/servo/id: 2
+ * /ainex_controller/controllers/r_ank_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/r_ank_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_ank_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/r_ank_roll_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_el_pitch_controller/joint_name: r_el_pitch
+ * /ainex_controller/controllers/r_el_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_el_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/r_el_pitch_controller/servo/id: 18
+ * /ainex_controller/controllers/r_el_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/r_el_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_el_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/r_el_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_el_yaw_controller/joint_name: r_el_yaw
+ * /ainex_controller/controllers/r_el_yaw_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_el_yaw_controller/port_id: 1
+ * /ainex_controller/controllers/r_el_yaw_controller/servo/id: 20
+ * /ainex_controller/controllers/r_el_yaw_controller/servo/init: 500
+ * /ainex_controller/controllers/r_el_yaw_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_el_yaw_controller/servo/min: 0
+ * /ainex_controller/controllers/r_el_yaw_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_gripper_controller/joint_name: r_gripper
+ * /ainex_controller/controllers/r_gripper_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_gripper_controller/port_id: 1
+ * /ainex_controller/controllers/r_gripper_controller/servo/id: 22
+ * /ainex_controller/controllers/r_gripper_controller/servo/init: 500
+ * /ainex_controller/controllers/r_gripper_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_gripper_controller/servo/min: 0
+ * /ainex_controller/controllers/r_gripper_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_hip_pitch_controller/joint_name: r_hip_pitch
+ * /ainex_controller/controllers/r_hip_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_hip_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/r_hip_pitch_controller/servo/id: 8
+ * /ainex_controller/controllers/r_hip_pitch_controller/servo/init: 500
+ * /ainex_controller/controllers/r_hip_pitch_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_hip_pitch_controller/servo/min: 0
+ * /ainex_controller/controllers/r_hip_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_hip_roll_controller/joint_name: r_hip_roll
+ * /ainex_controller/controllers/r_hip_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_hip_roll_controller/port_id: 1
+ * /ainex_controller/controllers/r_hip_roll_controller/servo/id: 10
+ * /ainex_controller/controllers/r_hip_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/r_hip_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_hip_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/r_hip_roll_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_hip_yaw_controller/joint_name: r_hip_yaw
+ * /ainex_controller/controllers/r_hip_yaw_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_hip_yaw_controller/port_id: 1
+ * /ainex_controller/controllers/r_hip_yaw_controller/servo/id: 12
+ * /ainex_controller/controllers/r_hip_yaw_controller/servo/init: 500
+ * /ainex_controller/controllers/r_hip_yaw_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_hip_yaw_controller/servo/min: 0
+ * /ainex_controller/controllers/r_hip_yaw_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_knee_controller/joint_name: r_knee
+ * /ainex_controller/controllers/r_knee_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_knee_controller/port_id: 1
+ * /ainex_controller/controllers/r_knee_controller/servo/id: 6
+ * /ainex_controller/controllers/r_knee_controller/servo/init: 760
+ * /ainex_controller/controllers/r_knee_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_knee_controller/servo/min: 0
+ * /ainex_controller/controllers/r_knee_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_sho_pitch_controller/joint_name: r_sho_pitch
+ * /ainex_controller/controllers/r_sho_pitch_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_sho_pitch_controller/port_id: 1
+ * /ainex_controller/controllers/r_sho_pitch_controller/servo/id: 14
+ * /ainex_controller/controllers/r_sho_pitch_controller/servo/init: 125
+ * /ainex_controller/controllers/r_sho_pitch_controller/servo/max: 0
+ * /ainex_controller/controllers/r_sho_pitch_controller/servo/min: 1000
+ * /ainex_controller/controllers/r_sho_pitch_controller/type: JointPositionCont...
+ * /ainex_controller/controllers/r_sho_roll_controller/joint_name: r_sho_roll
+ * /ainex_controller/controllers/r_sho_roll_controller/joint_speed: 1.0
+ * /ainex_controller/controllers/r_sho_roll_controller/port_id: 1
+ * /ainex_controller/controllers/r_sho_roll_controller/servo/id: 16
+ * /ainex_controller/controllers/r_sho_roll_controller/servo/init: 500
+ * /ainex_controller/controllers/r_sho_roll_controller/servo/max: 1000
+ * /ainex_controller/controllers/r_sho_roll_controller/servo/min: 0
+ * /ainex_controller/controllers/r_sho_roll_controller/type: JointPositionCont...
+ * /ainex_controller/gazebo_sim: False
+ * /ainex_controller/init_pose/head_pan: 0.0
+ * /ainex_controller/init_pose/head_tilt: 0.0
+ * /ainex_controller/init_pose/l_ank_pitch: 0.625
+ * /ainex_controller/init_pose/l_ank_roll: 0.016
+ * /ainex_controller/init_pose/l_el_pitch: -0.1
+ * /ainex_controller/init_pose/l_el_yaw: -1.926
+ * /ainex_controller/init_pose/l_gripper: 0.0
+ * /ainex_controller/init_pose/l_hip_pitch: -0.828
+ * /ainex_controller/init_pose/l_hip_roll: 0.016
+ * /ainex_controller/init_pose/l_hip_yaw: 0.0
+ * /ainex_controller/init_pose/l_knee: 1.192
+ * /ainex_controller/init_pose/l_sho_pitch: 0.0
+ * /ainex_controller/init_pose/l_sho_roll: 1.293
+ * /ainex_controller/init_pose/r_ank_pitch: -0.625
+ * /ainex_controller/init_pose/r_ank_roll: -0.016
+ * /ainex_controller/init_pose/r_el_pitch: 0.1
+ * /ainex_controller/init_pose/r_el_yaw: 1.926
+ * /ainex_controller/init_pose/r_gripper: 0.0
+ * /ainex_controller/init_pose/r_hip_pitch: 0.828
+ * /ainex_controller/init_pose/r_hip_roll: -0.016
+ * /ainex_controller/init_pose/r_hip_yaw: 0.0
+ * /ainex_controller/init_pose/r_knee: -1.192
+ * /ainex_controller/init_pose/r_sho_pitch: 0.0
+ * /ainex_controller/init_pose/r_sho_roll: -1.293
+ * /ainex_controller/serial_ports: [{'port_name': '/...
+ * /app/color_track/color_track/pid1_d: 0.003
+ * /app/color_track/color_track/pid1_i: 0.0
+ * /app/color_track/color_track/pid1_p: 0.13
+ * /app/color_track/color_track/pid2_d: 0.003
+ * /app/color_track/color_track/pid2_i: 0.0
+ * /app/color_track/color_track/pid2_p: 0.13
+ * /camera/camera_frame_id: camera
+ * /camera/camera_info_url: file:///home/ubun...
+ * /camera/camera_name: camera
+ * /camera/frame_rate: 10.0
+ * /camera/image_height: 480
+ * /camera/image_raw/compressed/jpeg_quality: 30
+ * /camera/image_topic: image_raw
+ * /camera/image_width: 640
+ * /camera/io_method: mmap
+ * /camera/pixel_format: yuyv
+ * /camera/rectify_color/queue_size: 10
+ * /camera/video_device: /dev/usb_cam
+ * /color_detection/debug: False
+ * /color_detection/enable_display: False
+ * /color_detection/enable_roi: True
+ * /color_track/pid1_d: 0.003
+ * /color_track/pid1_i: 0.0
+ * /color_track/pid1_p: 0.13
+ * /color_track/pid2_d: 0.003
+ * /color_track/pid2_i: 0.0
+ * /color_track/pid2_p: 0.13
+ * /face_detect/confidence: 0.5
+ * /face_detect/enable_display: False
+ * /imu_calib/calib_file: /home/ubuntu/ros_...
+ * /imu_filter/bias_alpha: 0.15
+ * /imu_filter/do_adaptive_gain: True
+ * /imu_filter/do_bias_estimation: True
+ * /imu_filter/gain_acc: 0.15
+ * /imu_filter/use_mag: True
+ * /joystick/autorepeat_rate: 20.0
+ * /joystick/coalesce_interval: 0.05
+ * /joystick/dev: /dev/input/js0
+ * /ros_robot_controller/calibration: [9.103e-07, 7.42e...
+ * /ros_robot_controller/freq: 100
+ * /ros_robot_controller/imu_frame: imu_link
+ * /rosapi/params_glob: [*]
+ * /rosapi/services_glob: [*]
+ * /rosapi/topics_glob: [*]
+ * /rosbridge_websocket/address: 0.0.0.0
+ * /rosbridge_websocket/authenticate: False
+ * /rosbridge_websocket/bson_only_mode: False
+ * /rosbridge_websocket/delay_between_messages: 0
+ * /rosbridge_websocket/fragment_timeout: 600
+ * /rosbridge_websocket/max_message_size: None
+ * /rosbridge_websocket/params_glob: [*]
+ * /rosbridge_websocket/port: 9090
+ * /rosbridge_websocket/retry_startup_delay: 5
+ * /rosbridge_websocket/services_glob: [*]
+ * /rosbridge_websocket/topics_glob: [*]
+ * /rosbridge_websocket/unregister_timeout: 3600000
+ * /rosbridge_websocket/use_compression: False
+ * /rosbridge_websocket/websocket_external_port: None
+ * /rosbridge_websocket/websocket_ping_interval: 0
+ * /rosbridge_websocket/websocket_ping_timeout: 30
+ * /rosdistro: noetic
+ * /rosversion: 1.16.0
+ * /teleop_fetch/head_sensitivity: 1.0
+ * /teleop_fetch/max_head_pan: 2.0
+ * /teleop_fetch/max_head_tilt: 2.0
+ * /teleop_fetch/movement_duration: 0.2
+
+NODES
+  /
+    ainex_controller (ainex_kinematics/ainex_controller.py)
+    app (ainex_app/app_node.py)
+    camera (usb_cam/usb_cam_node)
+    color_detection (ainex_example/color_detection_node.py)
+    face_detect (ainex_example/face_detect_node.py)
+    imu_calib (imu_calib/apply_calib)
+    imu_filter (imu_complementary_filter/complementary_filter_node)
+    joystick (joy/joy_node)
+    joystick_control (ainex_peripherals/joystick_control.py)
+    ros_robot_controller (ros_robot_controller/ros_robot_controller_node.py)
+    rosapi (rosapi/rosapi_node)
+    rosbridge_websocket (rosbridge_server/rosbridge_websocket)
+    teleop_fetch (teleop_fetch/fetcher.py)
+    topici_list (proverka_nod/topici_list.py)
+    web_video_server (web_video_server/web_video_server)
+  /camera/
+    manager (nodelet/nodelet)
+    rectify_color (nodelet/nodelet)
+[33m[ WARN] [1766455925.445855188]: unknown control 'white_balance_temperature_auto'
+[0m
+[33m[ WARN] [1766455925.466899538]: unknown control 'focus_auto'
+[0m
+2025-12-23 02:12:06+0000 [-] Log opened.
+Traceback (most recent call last):
+  File "/home/ubuntu/ros_ws/src/ainex_app/scripts/app_node.py", line 9, in <module>
+    from transitions import Machine
+ModuleNotFoundError: No module named 'transitions'
+2025-12-23 02:12:06+0000 [-] registered capabilities (classes):
+2025-12-23 02:12:06+0000 [-]  - <class 'rosbridge_library.capabilities.call_service.CallService'>
+2025-12-23 02:12:06+0000 [-]  - <class 'rosbridge_library.capabilities.advertise.Advertise'>
+2025-12-23 02:12:06+0000 [-]  - <class 'rosbridge_library.capabilities.publish.Publish'>
+2025-12-23 02:12:06+0000 [-]  - <class 'rosbridge_library.capabilities.subscribe.Subscribe'>
+2025-12-23 02:12:06+0000 [-]  - <class 'rosbridge_library.capabilities.defragmentation.Defragment'>
+2025-12-23 02:12:06+0000 [-]  - <class 'rosbridge_library.capabilities.advertise_service.AdvertiseService'>
+2025-12-23 02:12:06+0000 [-]  - <class 'rosbridge_library.capabilities.service_response.ServiceResponse'>
+2025-12-23 02:12:06+0000 [-]  - <class 'rosbridge_library.capabilities.unadvertise_service.UnadvertiseService'>
+2025-12-23 02:12:06+0000 [-] WebSocketServerFactory starting on 9090
+2025-12-23 02:12:06+0000 [-] Starting factory <autobahn.twisted.websocket.WebSocketServerFactory object at 0x7fffbaadccd0>
+2025-12-23 02:12:06+0000 [-] [INFO] [1766455926.572236]: Rosbridge WebSocket server started at ws://0.0.0.0:9090
+Traceback (most recent call last):
+  File "/home/ubuntu/ros_ws/src/ainex_example/scripts/face_detect/face_detect_node.py", line 12, in <module>
+    import mediapipe as mp
+ModuleNotFoundError: No module named 'mediapipe'
+[INFO] [1766455928.316768]: Serial port reading thread started
+[INFO] [1766455928.317030]: SerialHandler initialized
+[INFO] [1766455928.326626]: GameServices initialized for robot: robot_1
+[INFO] [1766455928.336988]: PID stabilization enabled: Kp=0.08, Ki=0.04, Kd=0.003, setpoint=90.0°, limits=(-2.05, 2.05)
+[INFO] [1766455928.338497]: StabilizationModule initialized: enabled=True
+[INFO] [1766455928.339655]: SpeedControl module initialized with 4 speed modes: [1, 2, 3, 4]
+[INFO] [1766455928.340642]: SpeedControl initialized with stabilization: enabled=True
+[INFO] [1766455928.347998]: ButtonHandler module initialized
+[INFO] [1766455928.356218]: Joystick Controller Initialized
+[INFO] [1766455928.395339]: IMU data received
+shutdown request: user request
+[INFO] [1766455962.261220]: Shutting down joystick controller...
+[INFO] [1766455962.266045]: Robot stopped on shutdown
+[INFO] [1766455962.437751]: Serial port reading thread stopped
+[33m[ WARN] [1766455963.458147798]: Shutdown request received.[0m
+[33m[ WARN] [1766455963.459481305]: Reason given for shutdown: [[/joystick] Reason: new node registered with same name][0m
+[0m[ INFO] [1766455924.237114354]: Opened joystick: /dev/input/js0 (SHANWAN Android Gamepad). deadzone_: 0.050000.[0m
+[31m[ERROR] [1766457768.594834431]: VIDIOC_DQBUF error 19, No such device[0m
+[0m[ INFO] [1766455925.298103774]: camera calibration URL: file:///home/ubuntu/.ros/camera_info/head_camera.yaml[0m
+[0m[ INFO] [1766455925.303209776]: Starting 'camera' (/dev/usb_cam) at 640x480 via mmap (yuyv) at 30 FPS[0m
+[33m[ WARN] [1766457774.206573601]: unknown control 'white_balance_temperature_auto'
+[0m
+[33m[ WARN] [1766457774.210336595]: unknown control 'focus_auto'
+[0m

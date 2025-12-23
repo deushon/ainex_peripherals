@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <launch>
-    <arg name="debug"               default="True"/>
+    <arg name="debug"               default="false"/>
     <arg name="use_mag"             default="true"/>
     <arg name="mag_topic"           default="/ros_robot_controller/mag"/>
     <arg name="imu_raw_topic"       default="/ros_robot_controller/imu_raw"/>
