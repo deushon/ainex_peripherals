@@ -51,10 +51,11 @@ class StabilizationModule:
         kd = pid_config.get('kd', 0.0)
         
         # Пределы выходного сигнала
-        output_limits = (
+        self.output_limits = (
             pid_config.get('lower_limit', -0.05),
             pid_config.get('upper_limit', 0.05)
         )
+        
         
         # Инициализируем PID контроллер
         if self.pid_enabled:
@@ -64,12 +65,12 @@ class StabilizationModule:
                     Ki=ki,
                     Kd=kd,
                     setpoint=self.pid_setpoint,
-                    output_limits=output_limits,
+                    output_limits=self.output_limits,
                     sample_time=None  # Обновляем при каждом вызове
                 )
                 self.last_time = None
                 rospy.loginfo(f"PID stabilization enabled: Kp={kp}, Ki={ki}, Kd={kd}, "
-                            f"setpoint={self.pid_setpoint}°, limits={output_limits}")
+                            f"setpoint={self.pid_setpoint}°, limits={self.output_limits}, ")
             except ImportError:
                 rospy.logerr("simple-pid library not installed! Install with: pip install simple-pid")
                 self.pid_enabled = False
@@ -129,9 +130,21 @@ class StabilizationModule:
             pid_output = self.pid_controller(pitch_deg)
             self.last_time = current_time
             
-            # Обновляем hip_pitch_offset в gait_base (по аналогии с init_x_offset в pose)
-            # Добавляем PID выход к базовому значению hip_pitch_offset
+            # Вычисляем init_x_offset на основе PID выхода (стабилизация по pitch)
             init_y_offset = 0.03
+            
+            # Вычисляем init_y_offset на основе roll (стабилизация по roll)
+            # Используем пропорциональную коррекцию, аналогичную PID
+            
+            # Обновляем pose_override с init_x_offset и init_y_offset
+            result.pose_override = RobotPoseParams(
+                init_x_offset=current_walking_params.pose.init_x_offset,
+                init_y_offset=init_y_offset,
+                init_roll_offset=current_walking_params.pose.init_roll_offset,
+                init_pitch_offset=current_walking_params.pose.init_pitch_offset
+            )
+            
+            # Обновляем hip_pitch_offset в gait_base
             hip_pitch_offset = 15 - pid_output
             
             result.gait_base_override = GaitBaseParams(
@@ -144,8 +157,9 @@ class StabilizationModule:
             result.modified = True
             
             # Логирование отключено для максимальной скорости
-            # rospy.logdebug(f"[PID STABILIZATION] pitch={pitch_deg:.2f}°, setpoint={self.pid_setpoint}°, "
-            #              f"control_effort={init_x_offset:.4f}")
+            # rospy.logdebug(f"[PID STABILIZATION] pitch={pitch_deg:.2f}°, roll={roll_deg:.2f}°, "
+            #              f"setpoint={self.pid_setpoint}°, init_x_offset={init_x_offset:.4f}, "
+            #              f"init_y_offset={init_y_offset:.4f}")
         else:
             # Если PID отключен, возвращаем без изменений
             result.modified = False
