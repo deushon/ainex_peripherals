@@ -201,15 +201,25 @@ class SpeedControl:
         period_time = list(params['period_time'])
         
         offset_keys = ['init_x_offset', 'init_y_offset', 'init_roll_offset', 'init_pitch_offset']
-        saved_offsets = {key: gait_param.get(key, 0.0) for key in offset_keys}
         
+        # Применяем все параметры из gait_base конфига
+        # Для offset'ов: если они есть в конфиге - используем их, иначе сохраняем текущие значения
         gait_base = params.get('gait_base', {})
-        for key, value in gait_base.items():
-            if key not in offset_keys:
-                gait_param[key] = value
         
-        for key in offset_keys:
-            gait_param[key] = saved_offsets[key]
+        # Сначала применяем все параметры из конфига (включая offset'ы)
+        for key, value in gait_base.items():
+            gait_param[key] = value
+        
+        # Применяем z_move_amplitude и arm_swap из конфига
+        if 'z_move_amplitude' in params:
+            gait_param['z_move_amplitude'] = params['z_move_amplitude']
+        if 'arm_swap' in params:
+            gait_param['arm_swap'] = params['arm_swap']
+        
+        # Убеждаемся, что обязательные параметры инициализированы, если их нет в конфиге
+        # hip_pitch_offset нужен для работы, но может отсутствовать в конфиге
+        if 'hip_pitch_offset' not in gait_param:
+            gait_param['hip_pitch_offset'] = 15.0  # Значение по умолчанию
         
         # Вычисляем амплитуды движения по джойстику (всегда, даже если 0)
         if abs(axes.get('ly', 0.0)) > self.axis_threshold:
