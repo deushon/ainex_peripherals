@@ -1,9 +1,9 @@
 imu:
-  # Параметры фильтрации IMU (настраиваются в launch/imu.launch)
-  # Для максимальной скорости реакции можно уменьшить gain_acc и bias_alpha
-  # Текущие значения в launch: gain_acc=0.2, bias_alpha=0.2
-  # Меньшие значения = быстрее реакция, но больше шум
-  # Рекомендуемые для быстрой реакции: gain_acc=0.1-0.15, bias_alpha=0.1-0.15
+  # IMU filtering parameters (configured in launch/imu.launch)
+  # For maximum responsiveness, you can reduce gain_acc and bias_alpha
+  # Current values in launch: gain_acc=0.2, bias_alpha=0.2
+  # Smaller values = faster response, but more noise
+  # Recommended for fast response: gain_acc=0.1-0.15, bias_alpha=0.1-0.15
   
   fall_detection:
     critical_angle_roll: 45.0

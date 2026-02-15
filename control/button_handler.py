@@ -100,7 +100,7 @@ class ButtonHandler:
     
     def r1_callback(self, new_state):
         """Обработчик кнопки R1 - увеличение скорости."""
-        if new_state == BUTTON_PRESSED and self.speed_control.get_speed_mode() < 4:
+        if new_state == BUTTON_PRESSED and self.speed_control.get_speed_mode() < 6:
             new_mode = self.speed_control.get_speed_mode() + 1
             self.speed_control.set_speed_mode(new_mode)
             self.board.set_buzzer(self.buzzer_r1_freq, self.buzzer_duration, self.buzzer_pause, self.buzzer_repeats)

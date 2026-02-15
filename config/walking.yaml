@@ -1,29 +1,29 @@
 walking:
   axis_threshold: 0.3
   
-  # PID контроллер для стабилизации по pitch
-  # Использует библиотеку simple-pid (pip install simple-pid)
+  # PID controller for pitch stabilization
+  # Uses simple-pid library (pip install simple-pid)
   stabilization_pid:
     enabled: true
-    # Целевое значение pitch (обычно 90° для вертикального положения)
+    # Pitch setpoint (usually 90° for upright posture)
     setpoint: 75.0
-    # Коэффициенты PID (начальные значения, используются если нет откалиброванных)
-    kp: 0.045086     # Пропорциональный коэффициент (начните с малых значений)
-    ki: 0.128103       # Интегральный коэффициент (0 для начала, затем увеличивайте при необходимости)
-    kd: 0.009100       # Дифференциальный коэффициент (0 для начала, затем увеличивайте для уменьшения колебаний)
-    # Пределы выходного сигнала (init_x_offset)
-    upper_limit: 15.05   # Максимальное смещение по X
-    lower_limit: -15.05  # Минимальное смещение по X
+    # PID gains (defaults used if no calibrated values)
+    kp: 0.045086     # Proportional gain (start with small values)
+    ki: 0.128103       # Integral gain (start at 0, then increase if needed)
+    kd: 0.009100       # Derivative gain (start at 0, then increase to reduce oscillations)
+    # Output limits (init_x_offset)
+    upper_limit: 15.05   # Maximum X offset
+    lower_limit: -15.05  # Minimum X offset
     
-    # Автоматическая калибровка PID регулятора
-    # Система автоматически тестирует разные углы и оптимизирует параметры
+    # Automatic PID controller calibration
+    # The system tests different angles and optimizes the parameters
     calibration:
-      enabled: false  # Включить режим калибровки (true/false)
-      start_delay: 5.0  # Задержка перед началом калибровки в секундах
-      duration: 120.0  # Общая длительность сбора данных в секундах (определяет количество циклов)
-      target_angle: 85.0  # Целевой угол для калибровки (градусы)
-      angle_range: 5.0  # Диапазон углов для калибровки ±5° (80° - 90°)
-      setpoint_duration: 10.0  # Время удержания каждого угла в секундах
+      enabled: false  # Enable calibration mode (true/false)
+      start_delay: 5.0  # Delay before calibration starts (seconds)
+      duration: 120.0  # Total data collection time (seconds, determines number of cycles)
+      target_angle: 85.0  # Target angle for calibration (degrees)
+      angle_range: 5.0  # Calibration angle range ±5° (80° - 90°)
+      setpoint_duration: 10.0  # Hold time per angle (seconds)
     
   
   height:
@@ -41,22 +41,22 @@ walking:
   speed_modes:
     1:
       name: "Very Low Speed"
-      period_time: [400, 0.5, 0.02] #[period_ms (период поднятия ног(левую и правую) по одному разу), dsp_ratio(доля времени, в течение которого обе ноги находятся на земле в цикле), y_swap_amplitude(изменение расстояния влево и вправо)]
+      period_time: [400, 0.5, 0.02] #[period_ms (time for one full left+right step), dsp_ratio (fraction of cycle with both feet on the ground), y_swap_amplitude (side-to-side distance variation)]
       move_amplitudes:
-        x: -0.01 #расстояние, плавающее влево и вправо
-        y: 0.012 #расстояние, плавающее вперед и назад
-        angle: 10.0 #угол поворота туловища
-      z_move_amplitude: 0.025 #высота подъема ноги
-      arm_swap: 30.0 #амплитуда взмаха руками
+        x: -0.01 #distance oscillating left and right
+        y: 0.012 #distance oscillating forward and backward
+        angle: 10.0 #body yaw rotation angle
+      z_move_amplitude: 0.025 #foot lift height
+      arm_swap: 30.0 #arm swing amplitude
       gait_base:
-        step_fb_ratio: 0.070 #X универсальное расстояние между левой и правой стопами
-        z_swap_amplitude: 0.002 #расстояние, плавающее вверх и вниз
-        init_y_offset: 0.03 #Раздвиг ног/Здвиг ног
-        body_height: 0.04 #Рост тела робота
-        init_x_offset: 0.0 #начальное положение смещено туловище в направлении x (спереди и сзади)
-        init_roll_offset: 0.0 #начальное смещение наклона влево и вправо
-        pelvis_offset: 5.0 #смещение таза (расстояние между поворотами тазобедренных суставов влево и вправо)
-        step_height: 0.02 #Подъем ног
+        step_fb_ratio: 0.070 #base X distance between left and right feet
+        z_swap_amplitude: 0.002 #up-and-down oscillation distance
+        init_y_offset: 0.03 #leg spread / leg bring-in
+        body_height: 0.04 #robot body height
+        init_x_offset: 0.0 #initial body offset along X (forward/backward)
+        init_roll_offset: 0.0 #initial roll offset left/right
+        pelvis_offset: 5.0 #pelvis offset (distance between left/right hip yaw joints)
+        step_height: 0.02 #step (foot lift) height
     2:
       name: "Low Speed"
       period_time: [280, 0.48, 0.02]
@@ -94,23 +94,79 @@ walking:
         init_roll_offset: 0.0
         pelvis_offset: 5.0
         step_height: 0.025
-    
+
     4:
       name: "High Speed"
-      period_time: [400, 0.5, 0.03] #[period_ms (период поднятия ног(левую и правую) по одному разу), dsp_ratio(доля времени, в течение которого обе ноги находятся на земле в цикле), y_swap_amplitude(изменение расстояния влево и вправо)]
+      period_time: [200, 0.38, 0.02] #[period_ms (time for one full left+right step), dsp_ratio (fraction of cycle with both feet on the ground), y_swap_amplitude (side-to-side distance variation)]
       move_amplitudes:
-        x: 0.019 #расстояние, плавающее влево и вправо
-        y: 0.012 #расстояние, плавающее вперед и назад
-        angle: 10.0 #угол поворота туловища
-      z_move_amplitude: 0.02 #высота подъема ноги
-      arm_swap: 30.0 #амплитуда взмаха руками
+        x: 0.02 #distance oscillating left and right
+        y: 0.012 #distance oscillating forward and backward
+        angle: 10.0 #body yaw rotation angle
+      z_move_amplitude: 0.036 #foot lift height
+      arm_swap: 30.0 #arm swing amplitude
       gait_base:
-        step_fb_ratio: 0.070 #X универсальное расстояние между левой и правой стопами
-        z_swap_amplitude: 0.002 #расстояние, плавающее вверх и вниз
-        init_y_offset: 0.038 #Раздвиг/Здвиг ног
-        body_height: 0.04 #Рост тела робота
-        init_x_offset: 0.0 #начальное положение смещено туловище в направлении x (спереди и сзади)
-        init_roll_offset: 0.0 #начальное смещение наклона влево и вправо
-        pelvis_offset: 5.0 #смещение таза (расстояние между поворотами тазобедренных суставов влево и вправо)
-        step_height: 0.028 #Подъем ног
+        step_fb_ratio: 0.090 #base X distance between left and right feet
+        z_swap_amplitude: 0.002 #up-and-down oscillation distance
+        init_y_offset: 0.03 #leg spread / leg bring-in
+        body_height: 0.04 #robot body height
+        init_x_offset: 0.0 #initial body offset along X (forward/backward)
+        init_roll_offset: 0.0 #initial roll offset left/right
+        pelvis_offset: 5.0 #pelvis offset (distance between left/right hip yaw joints)
+        step_height: 0.027
+    5:
+      name: "Rocket"
+      period_time: [150, 0.38, 0.02] #[period_ms (time for one full left+right step), dsp_ratio (fraction of cycle with both feet on the ground), y_swap_amplitude (side-to-side distance variation)]
+      move_amplitudes:
+        x: 0.02 #distance oscillating left and right
+        y: 0.012 #distance oscillating forward and backward
+        angle: 10.0 #body yaw rotation angle
+      z_move_amplitude: 0.036 #foot lift height
+      arm_swap: 30.0 #arm swing amplitude
+      gait_base:
+        step_fb_ratio: 0.090 #base X distance between left and right feet
+        z_swap_amplitude: 0.002 #up-and-down oscillation distance
+        init_y_offset: 0.03 #leg spread / leg bring-in
+        body_height: 0.04 #robot body height
+        init_x_offset: 0.0 #initial body offset along X (forward/backward)
+        init_roll_offset: 0.0 #initial roll offset left/right
+        pelvis_offset: 5.0 #pelvis offset (distance between left/right hip yaw joints)
+        step_height: 0.03
+    6:
+      name: "Ultra High Speed"
+      period_time: [130, 0.38, 0.02] #[period_ms (time for one full left+right step), dsp_ratio (fraction of cycle with both feet on the ground), y_swap_amplitude (side-to-side distance variation)]
+      move_amplitudes:
+        x: 0.02 #distance oscillating left and right
+        y: 0.012 #distance oscillating forward and backward
+        angle: 10.0 #body yaw rotation angle
+      z_move_amplitude: 0.04 #foot lift height
+      arm_swap: 30.0 #arm swing amplitude
+      gait_base:
+        step_fb_ratio: 0.090 #base X distance between left and right feet
+        z_swap_amplitude: 0.002 #up-and-down oscillation distance
+        init_y_offset: 0.03 #leg spread / leg bring-in
+        body_height: 0.04 #robot body height
+        init_x_offset: 0.0 #initial body offset along X (forward/backward)
+        init_roll_offset: 0.0 #initial roll offset left/right
+        pelvis_offset: 5.0 #pelvis offset (distance between left/right hip yaw joints)
+        step_height: 0.03
 
+
+
+      #   4:
+      # name: "High Speed" #skis
+      # period_time: [400, 0.5, 0.03] #[period_ms (time for one full left+right step), dsp_ratio (fraction of cycle with both feet on the ground), y_swap_amplitude (side-to-side distance variation)]
+      # move_amplitudes:
+      #   x: 0.019 #distance oscillating left and right
+      #   y: 0.012 #distance oscillating forward and backward
+      #   angle: 10.0 #body yaw rotation angle
+      # z_move_amplitude: 0.02 #foot lift height
+      # arm_swap: 30.0 #arm swing amplitude
+      # gait_base:
+      #   step_fb_ratio: 0.070 #base X distance between left and right feet
+      #   z_swap_amplitude: 0.002 #up-and-down oscillation distance
+      #   init_y_offset: 0.038 #leg spread / leg bring-in
+      #   body_height: 0.04 #robot body height
+      #   init_x_offset: 0.0 #initial body offset along X (forward/backward)
+      #   init_roll_offset: 0.0 #initial roll offset left/right
+      #   pelvis_offset: 5.0 #pelvis offset (distance between left/right hip yaw joints)
+      #   step_height: 0.028

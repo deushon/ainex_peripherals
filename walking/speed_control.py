@@ -68,7 +68,7 @@ class SpeedControl:
         """
         speed_params = {}
         
-        for mode_num in range(1, 5):
+        for mode_num in range(1, 7):
             mode_config = speed_modes_config.get(mode_num) or speed_modes_config.get(str(mode_num), {})
             if not mode_config:
                 rospy.logwarn(f"Speed mode {mode_num} not found in config, using defaults")
@@ -324,12 +324,12 @@ class SpeedControl:
         Устанавливает режим скорости.
         
         Args:
-            mode: Режим скорости (1-4)
+            mode: Режим скорости (1-6)
         
         Returns:
             bool: True если режим установлен успешно
         """
-        if 1 <= mode <= 4:
+        if 1 <= mode <= 6:
             self.speed_mode = mode
             speed_names = self._get_speed_names()
             rospy.loginfo(f"Speed mode set to: {self.speed_mode} ({speed_names.get(mode, 'Unknown')} Speed)")
@@ -339,10 +339,12 @@ class SpeedControl:
     def _get_speed_names(self):
         """Возвращает словарь имен режимов скорости."""
         return {
-            1: "Very Low",
-            2: "Low",
-            3: "Medium",
-            4: "High"
+            1: "Very Low Speed",
+            2: "Low Speed",
+            3: "Medium Speed",
+            4: "High Speed",
+            5: "Rocket",
+            6: "Ultra High Speed"
         }
     
     def get_speed_mode(self):
